@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-# Hugging Face SFT/OPD stack. veRL/vLLM/Ray are installed separately from a
+# Hugging Face SFT and joint GRPO+OPD stack. veRL/vLLM/Ray are installed separately from a
 # commit verified in the target Linux CUDA environment.
 train = [
   "torch>=2.4",

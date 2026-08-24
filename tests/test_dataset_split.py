@@ -61,24 +61,25 @@ def test_verl_generation_group_contract() -> None:
     )
 
 
-def test_verl_command_uses_grpo_and_custom_reward() -> None:
+def test_joint_command_uses_grpo_opd_and_custom_reward() -> None:
     from src.common import load_yaml
 
-    command = build_verl_command(load_yaml("configs/grpo.yaml"))
+    command = build_verl_command(load_yaml("configs/joint.yaml"))
     assert "-m" in command and "verl.trainer.main_ppo" in command
     assert "algorithm.adv_estimator=grpo" in command
+    assert "distillation.enabled=True" in command
     assert "reward.custom_reward_function.name=compute_score" in command
     assert not any("trl" in item.lower() for item in command)
 
 
-def test_training_stage_checkpoint_order_is_sft_grpo_opd() -> None:
+def test_joint_stage_initializes_student_and_teacher_from_sft() -> None:
     from src.common import load_yaml
 
-    grpo = load_yaml("configs/grpo.yaml")
-    opd = load_yaml("configs/opd.yaml")
-    assert grpo["lora_adapter_path"] == "outputs/sft/best"
-    assert opd["student_checkpoint"] == "outputs/grpo/best"
-    assert opd["teacher_checkpoint"] == "outputs/grpo/best"
+    joint = load_yaml("configs/joint.yaml")
+    assert joint["stage"] == "joint"
+    assert joint["model_name_or_path"] == "outputs/sft/latest/huggingface"
+    assert joint["teacher_model_path"] == joint["model_name_or_path"]
+    assert joint["opd"]["use_task_rewards"] is True
 
 
 def test_lora_scope_rejects_visual_modules() -> None:

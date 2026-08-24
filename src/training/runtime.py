@@ -460,7 +460,7 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "reward.custom_reward_function.path": config["reward_function_path"],
         "reward.custom_reward_function.name": config["reward_function_name"],
         "reward.custom_reward_function.reward_kwargs.reward_config_path": config.get(
-            "reward_config_path", "configs/grpo.yaml"
+            "reward_config_path", "configs/joint.yaml"
         ),
         "trainer.logger": ["console"],
         "trainer.project_name": config["project_name"],
