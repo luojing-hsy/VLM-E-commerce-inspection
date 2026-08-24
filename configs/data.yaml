@@ -1,0 +1,36 @@
+seed: 42
+source_mode: abo_rendered_audit
+num_products: 3000
+samples_per_product: 2
+page_width: 960
+page_height: 720
+split_ratios:
+  train: 0.80
+  validation: 0.10
+  test: 0.10
+paths:
+  raw_images: data/raw/images
+  abo_root: data/raw/abo
+  generated: data/generated
+  manifests: data/manifests
+abo:
+  locale: en_US
+  max_products_per_type: 25
+  min_image_width: 160
+  min_image_height: 160
+  phash_distance_threshold: 4
+  download_workers: 12
+  max_metadata_bytes: 120000000
+  max_selected_image_bytes: 400000000
+  listing_archive_url: https://amazon-berkeley-objects.s3.us-east-1.amazonaws.com/archives/abo-listings.tar
+  image_metadata_url: https://amazon-berkeley-objects.s3.us-east-1.amazonaws.com/images/metadata/images.csv.gz
+  small_image_base_url: https://amazon-berkeley-objects.s3.us-east-1.amazonaws.com/images/small
+class_minimums:
+  PASS: 600
+  PRODUCT_MISMATCH: 600
+  ATTRIBUTE_CONFLICT: 600
+  TEXT_LABEL_CONFLICT: 600
+  MISSING_REQUIRED_FIELD: 600
+  IMAGE_QUALITY: 600
+  IRRELEVANT_IMAGE: 600
+  DUPLICATE_IMAGE: 600

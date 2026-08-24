@@ -1,0 +1,23 @@
+stage: sft
+model_name_or_path: Qwen/Qwen3-VL-4B-Instruct
+dataset: data/manifests/sft_train.jsonl
+validation_dataset: data/manifests/sft_validation.jsonl
+output_dir: outputs/sft
+precision: bf16
+quantization: none
+gradient_checkpointing: true
+freeze_vision_encoder: true
+train_mm_projector: false
+lora_target_scope: llm_attention
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+learning_rate: 1.0e-5
+num_train_epochs: 2
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+max_sequence_length: 2048
+max_output_length: 256
+min_pixels: 784
+max_pixels: 50176

@@ -1,0 +1,12 @@
+Pillow
+pydantic
+PyYAML
+pytest
+
+# The Linux/Python 3.12 GPU stack is installed by scripts/setup.sh from
+# scripts/training-requirements.txt.
+# torch
+# transformers
+# accelerate
+# peft
+# veRL + vLLM + Ray pins and the required veRL patch live under scripts/ and patches/.

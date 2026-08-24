@@ -1,0 +1,21 @@
+schema_version: "1.0"
+dataset_split: validation
+manifest: data/manifests/samples_validation.jsonl
+counterfactual_manifest: data/manifests/counterfactuals_validation.jsonl
+predictions: outputs/evaluation/predictions.jsonl
+output: outputs/evaluation/metrics.json
+target_class_prior:
+  pass: 0.60
+  review: 0.25
+  reject: 0.15
+cost_matrix:
+  pass: {pass: 0.0, review: 0.6, reject: 0.9}
+  review: {pass: 0.9, review: 0.0, reject: 0.65}
+  reject: {pass: 1.0, review: 0.4, reject: 0.0}
+# Freeze these after collecting the base-model validation baseline.
+frozen_thresholds:
+  configured: false
+  opd_non_inferiority_margin: null
+  opd_business_risk_non_inferiority_margin: null
+  min_gap_improvement: null
+  min_business_risk_improvement: null

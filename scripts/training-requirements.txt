@@ -1,0 +1,18 @@
+# Direct training dependencies. Transitive resolution is performed by uv.
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+transformers @ git+https://github.com/huggingface/transformers.git@7ea2320c76117e6742364808a666ef6f2fb40a67
+accelerate==1.14.0
+peft==0.20.0
+datasets==5.0.1
+qwen-vl-utils==0.0.14
+verl==0.8.0
+vllm==0.25.1
+ray[default]==2.56.1
+tensordict==0.10.0
+numpy==2.2.6
+Pillow==12.3.0
+pydantic==2.13.4
+PyYAML==6.0.3
+pytest==9.1.1

@@ -1,0 +1,2 @@
+"""Deterministic synthetic data pipeline."""
+

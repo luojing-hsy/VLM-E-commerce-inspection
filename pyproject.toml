@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlm-product-audit"
+version = "0.1.0"
+description = "A reproducible Qwen3-VL post-training sandbox for synthetic e-commerce page auditing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "Pillow>=10.0",
+  "pydantic>=2.6",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# Hugging Face SFT/OPD stack. veRL/vLLM/Ray are installed separately from a
+# commit verified in the target Linux CUDA environment.
+train = [
+  "torch>=2.4",
+  "transformers>=4.51",
+  "accelerate>=1.2",
+  "peft>=0.14",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
