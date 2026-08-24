@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from src.common import load_yaml, sha256_file
-from src.data.split_manifest import SPLITS, manifest_path
+from src.data.split_manifest import SPLITS, TRAIN_SPLITS, manifest_path
 
 
 def _tree_hash(root: Path) -> tuple[str, int]:
@@ -23,9 +23,15 @@ def _tree_hash(root: Path) -> tuple[str, int]:
 def snapshot(config: dict) -> dict:
     manifest_root = Path(config["paths"]["manifests"])
     tracked = {}
-    for stem in ("products", "samples", "counterfactuals", "sft", "opd", "grpo"):
+    for stem in ("products", "samples", "counterfactuals"):
         for split in SPLITS:
             tracked[f"{stem}_{split}"] = manifest_path(config, stem, split)
+    for stem in ("sft", "opd", "grpo", "joint"):
+        for split in TRAIN_SPLITS:
+            tracked[f"{stem}_{split}"] = manifest_path(config, stem, split)
+    for name in ("source_images", "source_components", "source_audit"):
+        suffix = ".json" if name == "source_audit" else ".jsonl"
+        tracked[name] = manifest_root / f"{name}{suffix}"
     missing = [str(path) for path in tracked.values() if not path.exists()]
     if missing:
         raise FileNotFoundError(f"missing generated artifacts: {missing}")

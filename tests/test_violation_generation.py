@@ -29,6 +29,8 @@ def test_all_v1_violations_render_and_validate(tmp_path: Path) -> None:
     for index, violation in enumerate(VIOLATIONS):
         row = render_one(first, donor, violation, "train", f"sample_{index}", index % 4, config)
         assert Path(row["image"]).exists()
+        assert Path(row["image"]).parent.name == "pages"
+        assert Path(row["image"]).name == f"{row['sample_id']}.png"
         with Image.open(row["image"]) as image:
             assert image.size == (960, 720)
         AuditPrediction.model_validate(

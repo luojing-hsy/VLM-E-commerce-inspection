@@ -6,12 +6,13 @@ from pathlib import Path
 
 from src.common import load_yaml, read_jsonl, write_jsonl
 from src.data.export_sft import PROMPT, target_from_sample
-from src.data.split_manifest import SPLITS, lineage_from_sample, manifest_path, write_split_manifests
+from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
 
 DATA_SOURCE = "vlm_product_audit"
 
 
 def export(config: dict, split: str) -> list[dict]:
+    rows = [row for row in read_jsonl(manifest_path(config, "samples", split)) if row["dataset_stage"] == "grpo"]
     return [
         {
             "data_source": DATA_SOURCE,
@@ -23,23 +24,25 @@ def export(config: dict, split: str) -> list[dict]:
                 "ground_truth": json.dumps(target_from_sample(row), ensure_ascii=False, separators=(",", ":")),
             },
             "extra_info": {
+                "dataset_stage": row["dataset_stage"],
                 "split": row["split"],
                 "index": index,
                 "sample_id": row["sample_id"],
                 "lineage": lineage_from_sample(row),
             },
         }
-        for index, row in enumerate(read_jsonl(manifest_path(config, "samples", split)))
+        for index, row in enumerate(rows)
     ]
 
 
 def write_exports(config: dict) -> dict[str, Path]:
-    rows = [row for split in SPLITS for row in export(config, split)]
+    rows = [row for split in TRAIN_SPLITS for row in export(config, split)]
     return write_split_manifests(
         config,
         "grpo",
         rows,
         split_getter=lambda row: row["extra_info"]["split"],
+        splits=TRAIN_SPLITS,
     )
 
 

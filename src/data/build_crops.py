@@ -43,7 +43,13 @@ def build_crops(config: dict, samples: list[dict] | None = None) -> list[dict]:
             for index, evidence in enumerate(bbox_evidence):
                 pixel_box = _denorm(evidence["bbox_norm"], image.width, image.height)
                 crop_box = _expand(pixel_box, image.width, image.height)
-                crop_path = generated_root / sample["split"] / "crops" / sample["sample_id"] / f"crop_{index}.png"
+                crop_path = (
+                    generated_root
+                    / sample["dataset_stage"]
+                    / sample["split"]
+                    / "crops"
+                    / f"{sample['sample_id']}__crop_{index}.png"
+                )
                 crop_path.parent.mkdir(parents=True, exist_ok=True)
                 image.crop(crop_box).save(crop_path)
                 sample["crops"].append(

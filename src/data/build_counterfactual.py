@@ -15,7 +15,10 @@ def build_counterfactuals(config: dict, samples: list[dict] | None = None) -> li
     products = {item["product_id"]: item for item in read_split_manifests(config, "products")}
     counterfactuals: list[dict] = []
     for sample in samples:
-        if sample["violation_type"] not in CONSISTENCY_TYPES:
+        if (
+            sample["dataset_stage"] not in {"sft", "test"}
+            or sample["violation_type"] not in CONSISTENCY_TYPES
+        ):
             continue
         product = products[sample["source_product_ids"][0]]
         template_id = int(sample["template_id"].split("_")[-1])
@@ -27,6 +30,7 @@ def build_counterfactuals(config: dict, samples: list[dict] | None = None) -> li
             f"{sample['sample_id']}_cf",
             template_id,
             config,
+            dataset_stage=sample["dataset_stage"],
         )
         row["counterfactual_of"] = sample["sample_id"]
         row["pair_id"] = f"pair:{sample['sample_id']}"

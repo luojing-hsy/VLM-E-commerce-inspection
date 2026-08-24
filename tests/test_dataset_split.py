@@ -1,5 +1,37 @@
+from pathlib import Path
+
+import pytest
+
+from src.data.prepare_abo import _source_image_path
 from src.data.render_page import _split_for, _template_for_split
+from src.data.split_manifest import assert_stage_source_isolation, stage_assignment_for_component
 from src.training.runtime import assert_lora_targets, assert_standard_lora_config, assert_verl_grpo_config, build_verl_command
+
+
+def test_abo_source_image_id_is_used_as_flat_filename() -> None:
+    path = _source_image_path(Path("data/raw/abo"), "image/id:42", "small/a.webp")
+
+    assert path.parent.as_posix() == "data/raw/abo/images"
+    assert path.name.startswith("image_id_42__")
+    assert path.suffix == ".webp"
+
+
+def test_source_component_stage_assignment_is_stable() -> None:
+    ratios = {"sft": 0.50, "grpo": 0.25, "opd": 0.15, "test": 0.10}
+
+    first = stage_assignment_for_component("component-a", 42, ratios)
+
+    assert first == stage_assignment_for_component("component-a", 42, ratios)
+
+
+def test_stage_source_image_overlap_is_rejected() -> None:
+    products = [
+        {"product_id": "sft-product", "dataset_stage": "sft", "image_ids": ["shared-image"]},
+        {"product_id": "grpo-product", "dataset_stage": "grpo", "image_ids": ["shared-image"]},
+    ]
+
+    with pytest.raises(ValueError, match="source_image_id crosses dataset stages"):
+        assert_stage_source_isolation(products)
 
 
 def test_split_is_stable_for_same_family_and_seed() -> None:

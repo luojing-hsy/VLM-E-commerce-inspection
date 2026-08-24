@@ -4,8 +4,6 @@ import csv
 import gzip
 import hashlib
 import json
-import math
-import os
 import re
 import tarfile
 import time
@@ -17,10 +15,16 @@ from datetime import date
 from pathlib import Path
 from threading import Lock
 
+import numpy as np
 from PIL import Image
 
 from src.common import sha256_file, stable_hash, write_jsonl
-from src.data.split_manifest import stable_split_for, write_split_manifests
+from src.data.split_manifest import (
+    assert_stage_source_isolation,
+    stage_assignment_for_component,
+    stage_split_for_component,
+    write_split_manifests,
+)
 
 
 class UnionFind:
@@ -268,20 +272,22 @@ def _safe_image_id(image_id: str) -> str:
     return safe
 
 
+def _source_image_path(raw_root: Path, image_id: str, object_path: str) -> Path:
+    suffix = Path(object_path).suffix or ".jpg"
+    return raw_root / "images" / f"{_safe_image_id(image_id)}{suffix}"
+
+
 def _phash64(path: Path) -> int:
     with Image.open(path) as source:
-        pixels = list(source.convert("L").resize((32, 32), Image.Resampling.LANCZOS).getdata())
-    cosine = [[math.cos(math.pi * (2 * x + 1) * frequency / 64) for x in range(32)] for frequency in range(8)]
-    row_dct = [
-        [sum(pixels[y * 32 + x] * cosine[u][x] for x in range(32)) for u in range(8)]
-        for y in range(32)
-    ]
-    values = [
-        sum(row_dct[y][u] * cosine[v][y] for y in range(32))
-        for v in range(8)
-        for u in range(8)
-    ]
-    median = sorted(values[1:])[len(values[1:]) // 2]
+        pixels = np.asarray(
+            source.convert("L").resize((32, 32), Image.Resampling.LANCZOS),
+            dtype=np.float64,
+        )
+    coordinates = np.arange(32, dtype=np.float64)
+    frequencies = np.arange(8, dtype=np.float64)[:, None]
+    cosine = np.cos(np.pi * (2 * coordinates + 1) * frequencies / 64)
+    values = (cosine @ pixels @ cosine.T).ravel()
+    median = float(np.median(values[1:]))
     result = 0
     for index, value in enumerate(values):
         if value > median:
@@ -331,13 +337,11 @@ def _download_selected_images(
     raw_root: Path,
 ) -> tuple[list[dict], int]:
     base_url = config["abo"]["small_image_base_url"].rstrip("/") + "/"
-    image_root = raw_root / "images" / "by_id"
     assets: dict[str, dict] = {}
     for product in products:
         for role_index, image_id in enumerate(product["image_ids"]):
             metadata = dict(image_metadata[image_id])
-            suffix = Path(metadata["object_path"]).suffix or ".jpg"
-            local_path = image_root / _safe_image_id(image_id) / f"image{suffix}"
+            local_path = _source_image_path(raw_root, image_id, metadata["object_path"])
             metadata.update(
                 {
                     "path": local_path.as_posix(),
@@ -355,8 +359,13 @@ def _download_selected_images(
         with total_lock:
             total_bytes += size
 
+    asset_values = list(assets.values())
+    cached = sum(Path(row["path"]).exists() for row in asset_values)
+    print(f"ABO selected-image cache: {cached}/{len(asset_values)}", flush=True)
     with ThreadPoolExecutor(max_workers=int(config["abo"].get("download_workers", 12))) as pool:
-        list(pool.map(download_one, assets.values()))
+        for completed, _ in enumerate(pool.map(download_one, asset_values), start=1):
+            if completed % 500 == 0 or completed == len(asset_values):
+                print(f"ABO selected images ready: {completed}/{len(asset_values)}", flush=True)
     budget = int(config["abo"]["max_selected_image_bytes"])
     if total_bytes > budget:
         raise ValueError(f"selected ABO images use {total_bytes} bytes, exceeding budget {budget}")
@@ -428,20 +437,44 @@ def prepare_abo_products(config: dict) -> list[dict]:
     )
     assets, selected_image_bytes = _download_selected_images(products, image_metadata, config, raw_root)
     _merge_phash_components(products, int(abo_config["phash_distance_threshold"]))
+    seed = int(config["seed"])
     for product in products:
-        product["family_id"] = product["source_component_id"]
-        product["split"] = stable_split_for(
-            product["source_component_id"], int(config["seed"]), config["split_ratios"]
+        component_id = product["source_component_id"]
+        dataset_stage = stage_assignment_for_component(
+            component_id,
+            seed,
+            config["dataset_stage_ratios"],
+        )
+        product["family_id"] = component_id
+        product["dataset_stage"] = dataset_stage
+        product["split"] = stage_split_for_component(
+            component_id,
+            dataset_stage,
+            seed,
+            float(config["stage_validation_ratio"]),
         )
         product["license"] = "CC-BY-NC-4.0-conservative"
         product["license_status"] = "official_source_conflict"
         product["source_archive_sha256"] = sha256_file(listing_archive)
+    assert_stage_source_isolation(products)
+
+    image_assignments: dict[str, tuple[str, str]] = {}
+    for product in products:
+        assignment = (product["dataset_stage"], product["split"])
+        for image_id in product["image_ids"]:
+            previous = image_assignments.setdefault(image_id, assignment)
+            if previous != assignment:
+                raise ValueError(f"source image assignment conflict: {image_id} -> {previous}, {assignment}")
+    for asset in assets:
+        asset["dataset_stage"], asset["split"] = image_assignments[asset["source_image_id"]]
+
     write_split_manifests(config, "products", products)
     manifest_root = Path(config["paths"]["manifests"])
     write_jsonl(manifest_root / "source_images.jsonl", assets)
     component_rows = [
         {
             "source_component_id": component_id,
+            "dataset_stage": rows[0]["dataset_stage"],
             "split": rows[0]["split"],
             "source_product_ids": sorted(row["product_id"] for row in rows),
             "source_image_ids": sorted({value for row in rows for value in row["image_ids"]}),
@@ -463,6 +496,8 @@ def prepare_abo_products(config: dict) -> list[dict]:
         "effective_policy": "CC-BY-NC-4.0-conservative",
         "product_type_counts": dict(sorted(Counter(row["product_type"] for row in products).items())),
         "max_products_per_type": max(Counter(row["product_type"] for row in products).values()),
+        "dataset_stage_product_counts": dict(sorted(Counter(row["dataset_stage"] for row in products).items())),
+        "dataset_stage_image_counts": dict(sorted(Counter(row["dataset_stage"] for row in assets).items())),
         "content_hash": stable_hash(products),
     }
     target = manifest_root / "source_audit.json"

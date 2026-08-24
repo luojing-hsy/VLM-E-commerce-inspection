@@ -1,0 +1,64 @@
+stage: joint
+framework: verl
+entrypoint: verl.trainer.main_ppo
+dataset: data/manifests/joint_train.jsonl
+validation_dataset: data/manifests/joint_validation.jsonl
+output_dir: outputs/joint
+model_name_or_path: outputs/sft/latest/huggingface
+lora_adapter_path: null
+teacher_model_path: outputs/sft/latest/huggingface
+precision: bf16
+quantization: none
+learning_rate: 2.0e-6
+rollout_n: 4
+train_batch_size: 1
+ppo_mini_batch_size: 4
+ppo_epochs: 1
+max_prompt_length: 1792
+max_response_length: 256
+temperature: 0.8
+top_p: 0.95
+actor_strategy: fsdp2
+rollout_backend: vllm
+rollout_tensor_model_parallel_size: 1
+rollout_gpu_memory_utilization: 0.35
+actor_param_offload: true
+actor_optimizer_offload: true
+ref_param_offload: true
+ppo_max_token_len_per_gpu: 2048
+max_grad_norm: 1.0
+beta: 0.02
+lora_r: 16
+lora_alpha: 32
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+n_gpus_per_node: 1
+nnodes: 1
+teacher_n_gpus_per_node: 1
+teacher_nnodes: 1
+teacher_tensor_model_parallel_size: 1
+teacher_gpu_memory_utilization: 0.45
+total_epochs: 1
+save_freq: 20
+test_freq: 5
+project_name: vlm_product_audit
+experiment_name: qwen3_vl_4b_joint_grpo_opd
+reward_function_path: src/rewards/verl_reward.py
+reward_function_name: compute_score
+reward_config_path: configs/joint.yaml
+opd:
+  loss_mode: forward_kl_topk
+  top_k_logits: 64
+  loss_coefficient: 0.25
+  use_task_rewards: true
+  use_policy_gradient: false
+reward_weights:
+  action: 0.40
+  type: 0.15
+  evidence: 0.25
+  value: 0.20
+evidence_gate_threshold: 0.30
+evidence_gate_cap: 0.45
+cost_matrix:
+  pass: {pass: 0.0, review: 0.6, reject: 0.9}
+  review: {pass: 0.9, review: 0.0, reject: 0.65}
+  reject: {pass: 1.0, review: 0.4, reject: 0.0}

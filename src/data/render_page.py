@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import random
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,9 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from src.common import load_yaml, read_jsonl, stable_hash, write_jsonl
-from src.data.split_manifest import read_split_manifests, stable_split_for
+from src.data.split_manifest import DATASET_STAGES, TRAIN_SPLITS, read_split_manifests, stable_split_for
+
+OPD_VIOLATIONS = ("PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT")
 
 VIOLATIONS = (
     "PASS",
@@ -102,7 +105,9 @@ def render_one(
     sample_id: str,
     template_id: int,
     config: dict,
+    dataset_stage: str | None = None,
 ) -> dict:
+    dataset_stage = dataset_stage or str(product.get("dataset_stage") or ("test" if split == "test" else "sft"))
     width, height = int(config["page_width"]), int(config["page_height"])
     layout = _layout(template_id, width, height)
     background = (248 - 3 * template_id, 249 - template_id, 252)
@@ -201,7 +206,7 @@ def render_one(
         _paste_center(canvas, image, box)
 
     generated_root = Path(config["paths"]["generated"])
-    image_path = generated_root / split / "pages" / sample_id / "page.png"
+    image_path = generated_root / dataset_stage / split / "pages" / f"{sample_id}.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(image_path)
 
@@ -261,6 +266,7 @@ def render_one(
         "source_image_ids": sorted(source_image_ids),
         "image_size": [width, height],
         "source_product_ids": source_ids,
+        "dataset_stage": dataset_stage,
         "split": split,
         "template_id": f"template_{template_id:02d}",
         "seed": int(config["seed"]),
@@ -285,50 +291,85 @@ def render_one(
 
 def build_pages(config: dict) -> list[dict]:
     products = read_split_manifests(config, "products")
-    by_split: dict[str, list[dict]] = defaultdict(list)
+    by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for product in products:
-        split = product["split"]
-        by_split[split].append(product)
-    if any(len(items) < 2 for items in by_split.values()) or set(by_split) != {"train", "validation", "test"}:
-        raise ValueError("Product pool is too small to create all splits with in-split donors")
+        by_partition[(product["dataset_stage"], product["split"])].append(product)
+
+    expected = {(stage, split) for stage in DATASET_STAGES[:-1] for split in TRAIN_SPLITS}
+    expected.add(("test", "test"))
+    missing = sorted(partition for partition in expected if len(by_partition[partition]) < 2)
+    if missing:
+        raise ValueError(f"product pool is too small for stage/split donors: {missing}")
+
+    sample_budgets = config.get("samples_per_product")
+    if not isinstance(sample_budgets, dict) or set(sample_budgets) != set(DATASET_STAGES):
+        raise ValueError(f"samples_per_product must define {DATASET_STAGES}")
 
     rows: list[dict] = []
-    samples_per_product = int(config.get("samples_per_product", 1))
-    if samples_per_product < 1:
-        raise ValueError("samples_per_product must be positive")
-    for split in ("train", "validation", "test"):
-        items = sorted(by_split[split], key=lambda item: item["product_id"])
-        rng = random.Random(f"{config['seed']}:{split}")
-        sample_index = 0
-        for product in items:
-            candidates = [
-                item
-                for item in items
-                if item["product_id"] != product["product_id"]
-                and item.get("source_component_id", item["family_id"])
-                != product.get("source_component_id", product["family_id"])
-            ]
-            if not candidates:
-                raise ValueError(f"split={split} has no donor outside the source component")
-            for _ in range(samples_per_product):
-                donor = candidates[rng.randrange(len(candidates))]
-                violation = VIOLATIONS[sample_index % len(VIOLATIONS)]
-                sample_id = f"{split}_{sample_index:05d}"
-                template_id = _template_for_split(split, sample_index)
-                rows.append(render_one(product, donor, violation, split, sample_id, template_id, config))
-                sample_index += 1
+    for stage in DATASET_STAGES:
+        violations = OPD_VIOLATIONS if stage == "opd" else VIOLATIONS
+        splits = ("test",) if stage == "test" else TRAIN_SPLITS
+        samples_per_product = int(sample_budgets[stage])
+        if samples_per_product < 1:
+            raise ValueError(f"samples_per_product.{stage} must be positive")
+        for split in splits:
+            items = sorted(by_partition[(stage, split)], key=lambda item: item["product_id"])
+            rng = random.Random(f"{config['seed']}:{stage}:{split}")
+            sample_index = 0
+            for product in items:
+                candidates = [
+                    item
+                    for item in items
+                    if item["product_id"] != product["product_id"]
+                    and item.get("source_component_id", item["family_id"])
+                    != product.get("source_component_id", product["family_id"])
+                ]
+                if not candidates:
+                    raise ValueError(f"stage={stage} split={split} has no donor outside the source component")
+                for _ in range(samples_per_product):
+                    donor = candidates[rng.randrange(len(candidates))]
+                    violation = violations[sample_index % len(violations)]
+                    sample_id = f"{stage}_{split}_{sample_index:05d}"
+                    template_id = _template_for_split(split, sample_index)
+                    rows.append(
+                        render_one(
+                            product,
+                            donor,
+                            violation,
+                            split,
+                            sample_id,
+                            template_id,
+                            config,
+                            dataset_stage=stage,
+                        )
+                    )
+                    sample_index += 1
     return rows
 
+def _reset_derived_outputs(config: dict) -> None:
+    workspace = Path.cwd().resolve()
+    generated_root = Path(config["paths"]["generated"]).resolve()
+    if generated_root == workspace or workspace not in generated_root.parents:
+        raise ValueError(f"generated path must stay below the workspace: {generated_root}")
+    if generated_root.exists():
+        shutil.rmtree(generated_root)
+    generated_root.mkdir(parents=True)
+
+    manifest_root = Path(config["paths"]["manifests"])
+    for stage in ("sft", "grpo", "opd"):
+        (manifest_root / f"{stage}_test.jsonl").unlink(missing_ok=True)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render product pages and inject one deterministic violation")
     parser.add_argument("--config", default="configs/data.yaml")
     args = parser.parse_args()
     config = load_yaml(args.config)
+    _reset_derived_outputs(config)
     rows = build_pages(config)
     from src.data.build_counterfactual import build_counterfactuals
     from src.data.build_crops import build_crops
     from src.data.export_grpo import write_exports as export_grpo
+    from src.data.export_joint import write_exports as export_joint
     from src.data.export_opd import write_exports as export_opd
     from src.data.export_sft import write_exports as export_sft
     from src.data.split_manifest import write_split_manifests
@@ -340,6 +381,7 @@ def main() -> None:
     export_sft(config)
     export_opd(config)
     export_grpo(config)
+    export_joint(config)
     counts = Counter(row["violation_type"] for row in rows)
     print(f"wrote {len(rows)} pages to {', '.join(str(path) for path in sample_targets.values())}")
     print("class counts:", dict(sorted(counts.items())))

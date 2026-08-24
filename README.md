@@ -1,118 +1,119 @@
-# Qwen3-VL 商品页视觉质检后训练项目
+# Qwen3-VL 商品页视觉质检：SFT → 联合 RL + OPD
 
-这是一个面向个人学习和简历展示的可复现实验项目：用程序生成商品详情页与可验证违规，再为 Qwen3-VL 准备 Hugging Face SFT、基于 veRL 的 cost-sensitive GRPO 和最终 regional-to-global OPD 数据接口。项目不使用人工标注、闭源 API、奖励模型或 LLM-as-a-Judge。
+本仓库实现一个两阶段、无 LLM-as-a-Judge 的电商商品页视觉质检后训练项目：
 
-当前版本刻意把重心放在一台普通电脑也能验证的部分。CPU 侧的数据生成、八类违规、证据框、反事实、crop、结构化解析、reward 和评测已实现；4B 模型训练入口负责检查数据/配置并记录运行元数据，不会默认下载模型或启动昂贵训练。
+```text
+Stage 1：Qwen3-VL BF16 LoRA SFT
+    ↓ 同一个 SFT 检查点
+Stage 2：veRL Cost-sensitive GRPO + regional-to-global OPD 联合更新
+    ↓
+固定测试集评测
+```
 
-## 已实现
+可以采用 veRL。仓库固定 `verl==0.8.0`：Stage 1 使用官方多模态 `sft_trainer`，Stage 2 使用 `verl.trainer.main_ppo`、FSDP2、vLLM rollout、规则 reward 和 veRL 原生 `policy_loss + coef × distillation_loss`。由于上游 veRL 默认让教师和学生共享同一 prompt，本项目提供一个经过版本与 SHA-256 校验的最小补丁，使冻结教师可看“完整页 + 高清证据 crop”，学生始终只看完整页。
 
-- 默认固定 seed 生成 3,000 个带三视图的合成商品、约 6,000 个主页面和约 2,250 个反事实页面，避免分发第三方图片；
-- 四种 Pillow 页面布局，以及 `PASS` 和七类单标签违规；
-- 完整页 `[0,1000]` 证据坐标、图片索引、重复图对、缺失字段证据；
-- 一致性违规的最小反事实页面与 renderer-derived 高清 crop；
-- Qwen conversation SFT、veRL 原生多模态 GRPO，以及最终 OPD JSONL 导出；
-- Pydantic 1.0 协议、宽容 JSON parser、成本矩阵 reward、连续 IoU 和证据门控；
-- top-k union + `other` 概率桶的 OPD KL（纯 Python 参考版和 PyTorch 可微版）；
-- 数据泄漏、图像解码、bbox、crop、类别下限、反事实恢复等校验；
-- 无 Judge 的分类、业务风险、值读取、证据和反事实评测。
+## 当前实现
 
-## 完整 CPU 数据生成
+- 基于之前的数据集契约，先按来源连通分量划分 `sft / grpo / opd / test`，再渲染页面；同商品族、供体和近重复图片不跨阶段。
+- 保留 `PASS` 与七类单标签违规、程序化证据、反事实和 renderer-derived crop。
+- `sft_train.jsonl` 转为 veRL `MultiTurnSFTDataset` 所需 Parquet，assistant 以外 token 不进入 SFT loss。
+- `joint_train.jsonl` 合并两个互斥子池：GRPO 子池只计算规则 RL；OPD 子池同时计算规则 RL 与蒸馏 KL。
+- OPD 学生 prompt 只有完整页；教师 prompt 为完整页加 crop。教师输出不充当评分器。
+- OPD 只蒸馏业务语义值：`observed_value=2.0`、`violation_type/listed_value=1.5`、`decision/field=1.0`；JSON key、标点、证据 bbox 与 RL-only 样本权重为 0。
+- 数据、模型、检查点和运行输出均被 Git 忽略；仓库只提交代码、配置、文档和小型测试。
+
+本次重构完成的是代码与 CPU 回归验证；4B GPU 训练及最终指标尚未在当前 Windows 环境实际运行，不能把配置值写成实验结论。
+
+## 数据流
+
+```text
+ABO / 合规原始商品
+    → listing-image-family-pHash 来源图
+    → sft / grpo / opd / test 阶段隔离
+    → 页面渲染、单违规注入、反事实、crop
+    ├─ sft_{train,validation}.jsonl
+    ├─ grpo_{train,validation}.jsonl ─┐
+    ├─ opd_{train,validation}.jsonl  ─┴─ joint_{train,validation}.jsonl
+    └─ samples_test.jsonl（冻结后只评测一次）
+```
+
+Stage 2 的两个子池不能互换：GRPO 池用于动作与证据策略学习；OPD 池必须有局部证据 crop，并通过确定性 eligibility。`export_joint.py` 不会把 crop 暴露给学生。
+
+## CPU 数据与测试
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 
-.\.venv\Scripts\python -m pytest
-.\.venv\Scripts\python -m src.data.prepare_products --config configs/data.yaml
-.\.venv\Scripts\python -m src.data.render_page --config configs/data.yaml
-.\.venv\Scripts\python -m src.data.validate_dataset --config configs/data.yaml
-.\.venv\Scripts\python -m src.evaluation.evaluate --config configs/eval.yaml --oracle-smoke
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m src.data.prepare_products --config configs/data.yaml
+.\.venv\Scripts\python.exe -m src.data.render_page --config configs/data.yaml
+.\.venv\Scripts\python.exe -m src.data.validate_dataset --config configs/data.yaml
 ```
 
-`validate_dataset` 会同时生成 `data/manifests/agents_compliance.json`。如需独立复查 `Agents.md` 适用项：
+`render_page` 会同步生成 SFT、GRPO、OPD 和 joint manifest。已有页面只需重新导出联合数据时可运行：
 
 ```powershell
-.\.venv\Scripts\python -m src.data.audit_agents_compliance --config configs/data.yaml
+.\.venv\Scripts\python.exe -m src.data.export_joint --config configs/data.yaml
 ```
 
-完整重现性复验分两次记录：第一次生成后加 `--record`，再次完整生成后不加该参数比较。它会检查商品清单、SFT/OPD/GRPO 导出和全部生成图片字节：
+初次生成的 OPD 候选状态是 `pending_model_inference`，不会进入 joint OPD 子池。用冻结的 SFT checkpoint 对“完整页 + crop”推理后，准备如下 JSONL：
+
+```json
+{"sample_id":"...","prediction":{"schema_version":"1.0","decision":"reject","violation_type":"ATTRIBUTE_CONFLICT","field":"model","listed_value":"Model Y","observed_value":"Model X","evidence":[...]}}
+```
+
+再运行确定性 gate；脚本校验 decision、类型、归一化 observed value 与证据 IoU，并重新导出 joint manifest：
 
 ```powershell
-.\.venv\Scripts\python -m src.data.check_reproducibility --config configs/data.yaml --record
-# 再次运行 prepare_products 与 render_page
-.\.venv\Scripts\python -m src.data.check_reproducibility --config configs/data.yaml
+.\.venv\Scripts\python.exe -m src.data.approve_opd --config configs/data.yaml --predictions outputs/sft/opd_teacher_predictions.jsonl
 ```
 
-默认完整生成会写入上万个图片文件，耗时取决于 CPU 和磁盘。若只想快速检查代码，可临时把 `configs/data.yaml` 的 `num_products` 改为 48、`samples_per_product` 改为 1，并把各类下限改为 1。
-
-`--oracle-smoke` 只验证指标链路，不能当作模型结果。真实评测文件为 JSONL，每行包含 `sample_id` 和 `prediction`（字符串或对象），然后运行：
+训练前预检不会下载模型或启动 GPU：
 
 ```powershell
-.\.venv\Scripts\python -m src.evaluation.evaluate --config configs/eval.yaml --predictions outputs/baseline/predictions.jsonl
+.\.venv\Scripts\python.exe -m src.training.train_sft --config configs/sft.yaml --prepare-only
+.\.venv\Scripts\python.exe -m src.training.train_joint --config configs/joint.yaml --prepare-only
+.\.venv\Scripts\python.exe -m src.training.train_joint --config configs/joint.yaml --print-command
 ```
 
-训练前的可复现性检查：
+## Linux CUDA 训练
 
-```powershell
-.\.venv\Scripts\python -m src.training.train_sft --config configs/sft.yaml --prepare-only
-.\.venv\Scripts\python -m src.training.train_grpo --config configs/grpo.yaml --prepare-only
-.\.venv\Scripts\python -m src.training.train_opd --config configs/opd.yaml --prepare-only
-```
-
-GRPO 的 `--prepare-only` 只检查 veRL 数据、分组 batch、LoRA 和自定义 reward 契约，不导入或安装 veRL。Linux CUDA 训练环境使用 Python 3.12，可通过固定入口安装并检查：
+训练依赖只支持项目锁定的 Linux CUDA 环境：
 
 ```bash
 bash scripts/setup.sh
-bash scripts/basemodel.sh
-bash scripts/sft.sh --prepare-only
-bash scripts/opd.sh --prepare-only
-bash scripts/grpo.sh --dry-run
+bash scripts/sft.sh
+bash scripts/joint.sh --dry-run
+bash scripts/joint.sh
 ```
 
-`setup.sh` 从 `scripts/training-requirements.txt` 安装固定的 SFT、veRL 0.8.0、vLLM 0.25.1 与 Ray 2.56.1 组合。安装后会对 veRL 版本、补丁文件、原目标文件和补丁后目标文件执行 SHA-256 校验，再应用 `patches/verl-0.8.0-jsonl-image-path.patch`，使 veRL 读取本项目 JSONL 中的图片路径字符串。
+Stage 1 结束后，启动器把最后一个含 `huggingface/` 的检查点记录为 `outputs/sft/latest`。Stage 2 的学生与冻结教师均从 `outputs/sft/latest/huggingface` 初始化，学生再训练新的 LoRA。
 
-`basemodel.sh` 评测已生成的 `outputs/baseline/predictions.jsonl`；它不会用 oracle 标签代替模型推理。当前 `train_sft.py` 和 `train_opd.py` 仍是预检入口，因此对应 `.sh` 应先使用 `--prepare-only`。查看正式 GRPO 将执行的 Hydra 命令：
+资源边界必须明确：当前 veRL 原生蒸馏把 actor/rollout 与 teacher 放在独立资源池，默认配置是 actor 1 GPU + teacher 1 GPU，因此完整联合阶段至少需要 2 张 CUDA GPU；目标预算为 2×24 GB，并通过 offload、分辨率和 batch 控制显存。单张 24 GB GPU 可以跑 Stage 1，但不能在不改变算法/资源调度的前提下运行本仓库的精确联合 Stage 2。
 
-```powershell
-.\.venv\Scripts\python -m src.training.train_grpo --config configs/grpo.yaml --print-command
-```
+`scripts/setup.sh` 会依次校验并应用：
 
-正式 GRPO 入口是 `python -m verl.trainer.main_ppo`，训练使用 FSDP2、vLLM rollout 和 LoRA。`src/rewards/verl_reward.py` 将现有成本矩阵、类型、证据及字段值奖励适配到 veRL 的 `compute_score` API，并返回各分项供训练日志记录。当前 Windows/CPU 环境不会安装或运行该 Linux GPU 栈。
+- `patches/verl-0.8.0-jsonl-image-path.patch`：读取 JSONL 图片路径；
+- `patches/verl-0.8.0-joint-opd.patch`：特权教师 prompt、教师/学生响应对齐、按样本与语义 token 的 OPD mask。
 
-## 项目结构
+安装器拒绝未知 veRL 版本或未知目标文件，不会静默修改不匹配的环境。
 
-```text
-configs/                 数据、SFT、GRPO、OPD、评测配置
-src/data/                商品生成、渲染、反事实、crop、导出和校验
-src/models/schema.py     结构化输出协议
-src/rewards/             无 Judge 的可组合规则 reward
-src/training/            OPD loss 与训练前运行契约
-src/evaluation/          业务、感知和反事实指标
-tests/                   核心不变量的单元测试
-```
+## 联合目标
 
-生成图片按数据集划分组织，`pages` 是完整商品页，`crops` 是由证据框自动裁出的 OPD 局部图：
+对 GRPO 子池，`w_t=0`，只优化成本敏感策略目标。对 OPD 子池：
 
-```text
-data/generated/
-├── train/{pages,crops}
-├── validation/{pages,crops}
-└── test/{pages,crops}
-```
+\[
+L = L_{GRPO} + \lambda\frac{\sum_t w_t\,KL(p_T^t\parallel p_S^t)}{\sum_t w_t},
+\qquad \lambda=0.25
+\]
 
-文件名中的 `_cf` 表示 counterfactual（反事实）样本。它保持商品、模板和其他内容不变，只恢复导致违规的字段，并将目标标签改为 `PASS`。
+教师在学生生成的同一前缀上提供 top-k 分布，`top_k=64`。教师 prompt 比学生多 crop，但教师响应 prompt 部分会在拼 batch 前移除，所以只有同一 response token 位置参与 KL。规则 reward 仍只包含业务动作、违规类型、证据和可见字段值，不包含 JSON 格式分、长度分、置信度或 Judge 分。
 
-## 简历表述参考
+## 评测与范围
 
-> 构建基于 Qwen3-VL 的电商商品页视觉质检后训练实验管线；使用 Pillow 程序化生成 8 类可审计样本及证据坐标，通过 source-aware split 和反事实对降低数据泄漏与视觉捷径；实现 top-k regional-to-global 自蒸馏 KL 与成本敏感组合奖励，并以 IoU、字段归一化和业务成本完成无 LLM Judge 评测。
+只比较同一模型的 `Base / SFT / SFT+Joint(RL+OPD)`，报告三分类、违规类型 Macro-F1、严重漏放率、业务风险、字段值、证据 IoU、反事实一致性和 regional-to-global gap，并使用 paired bootstrap 95% CI。测试配置冻结后，test 只运行一次。
 
-只有实际完成 GPU 实验后，才建议在简历中补充具体 F1、风险下降或显存数据。
+合成页结论只适用于商品文档一致性、OCR 与 grounding，不代表天然包装文字、法律虚假宣传或真实平台规则效果。ABO 原图与派生数据受来源许可约束，不进入 GitHub。
 
-## 范围与后续工作
-
-- 合成图验证的是商品文档一致性、OCR 与 grounding，不代表天然包装文字或真实平台规则效果。
-- 当前未包含 ABO 下载/许可审计，也未自动运行完整 Qwen3-VL/veRL 训练循环。
-- `opd.jsonl` 是 full-page + crop 候选集；其中 `teacher_filter_status` 保持 `pending_model_inference`。只有冻结的 GRPO teacher 推理并通过规则校验后，才能视为最终 OPD 训练集。
-- SFT、GRPO 和最终 OPD Student 均使用 BF16 底座上的标准 LoRA；GRPO 从 `outputs/sft/best` 初始化，OPD teacher/student 都从 `outputs/grpo/best` 初始化。训练配置显式设置 `quantization: none`，不依赖 QLoRA 或 bitsandbytes。
-- `scripts/training-requirements.txt` 固定 GPU 直接依赖；完成真实 Linux CUDA 前向 smoke test 后，仍应归档 uv 的完整传递依赖解析结果和 CUDA/驱动信息。在 baseline 后冻结 `configs/eval.yaml` 中的阈值，再运行一次 test。
-- 根目录原有的 `index.html`、`styles.css`、`script.js` 和 `assets/` 未被本项目修改。
+详细设计见 [VLM_POST_TRAINING_PROJECT.md](VLM_POST_TRAINING_PROJECT.md)，数据字段与隔离规则见 [docs/dataset_contract.md](docs/dataset_contract.md)。veRL 依据为官方 [OPD 文档](https://verl.readthedocs.io/en/latest/algo/opd.html)、[Qwen3-VL SFT 示例](https://github.com/verl-project/verl/blob/v0.8.0/examples/sft/vlm/run_qwen3_vl_2b_fsdp.sh) 和 [LoRA 文档](https://verl.readthedocs.io/en/latest/advance/ppo_lora.html)。

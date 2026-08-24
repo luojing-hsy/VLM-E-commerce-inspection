@@ -5,7 +5,7 @@ from pathlib import Path
 
 from src.common import load_yaml, read_jsonl
 from src.data.export_sft import PROMPT, target_from_sample
-from src.data.split_manifest import SPLITS, lineage_from_sample, manifest_path, write_split_manifests
+from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
 
 ALLOWED_TYPES = {"PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT"}
 
@@ -15,6 +15,7 @@ def export(config: dict, split: str) -> list[dict]:
     return [
         {
             "sample_id": row["sample_id"],
+            "dataset_stage": row["dataset_stage"],
             "split": row["split"],
             "full_image": row["image"],
             "crop_images": [crop["path"] for crop in row.get("crops", [])],
@@ -32,13 +33,15 @@ def export(config: dict, split: str) -> list[dict]:
             "teacher_filter_status": "pending_model_inference",
         }
         for row in rows
-        if row["violation_type"] in ALLOWED_TYPES and row.get("crops")
+        if row["dataset_stage"] == "opd"
+        and row["violation_type"] in ALLOWED_TYPES
+        and row.get("crops")
     ]
 
 
 def write_exports(config: dict) -> dict[str, Path]:
-    rows = [row for split in SPLITS for row in export(config, split)]
-    return write_split_manifests(config, "opd", rows)
+    rows = [row for split in TRAIN_SPLITS for row in export(config, split)]
+    return write_split_manifests(config, "opd", rows, splits=TRAIN_SPLITS)
 
 
 def main() -> None:

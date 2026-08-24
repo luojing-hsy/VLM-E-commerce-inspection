@@ -43,6 +43,8 @@ uv pip install \
 "${PYTHON}" "${ROOT}/scripts/verify_training_stack.py"
 "${PYTHON}" "${ROOT}/scripts/apply_verl_patch.py"
 "${PYTHON}" "${ROOT}/scripts/apply_verl_patch.py" --check
+"${PYTHON}" "${ROOT}/scripts/apply_verl_joint_patch.py"
+"${PYTHON}" "${ROOT}/scripts/apply_verl_joint_patch.py" --check
 
-echo "Qwen3-VL SFT, veRL/vLLM GRPO, and final OPD environment is ready: ${VENV_DIR}"
-echo "Run launchers from the repository root, for example: bash scripts/grpo.sh --dry-run"
+echo "Qwen3-VL SFT and joint veRL GRPO+OPD environment is ready: ${VENV_DIR}"
+echo "Run launchers from the repository root, for example: bash scripts/joint.sh --dry-run"

@@ -1,20 +1,33 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 
-from src.training.runtime import validate_stage_config, write_run_manifest
+from src.training.runtime import (
+    build_verl_sft_command,
+    launch_verl_sft,
+    validate_stage_config,
+    write_run_manifest,
+)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate and stage a Qwen3-VL BF16 LoRA SFT run")
+    parser = argparse.ArgumentParser(description="Launch Qwen3-VL BF16 LoRA SFT with veRL")
     parser.add_argument("--config", default="configs/sft.yaml")
-    parser.add_argument("--prepare-only", action="store_true", help="validate inputs and write run metadata")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--prepare-only", action="store_true", help="validate JSONL inputs and write run metadata")
+    mode.add_argument("--print-command", action="store_true")
     args = parser.parse_args()
     config = validate_stage_config(args.config, "sft")
     manifest = write_run_manifest(args.config, config)
     print(f"SFT run inputs validated; metadata: {manifest}")
-    if not args.prepare_only:
-        raise SystemExit("Full 4B training is intentionally opt-in in this portfolio build. Re-run with --prepare-only, or connect this validated export to a pinned Qwen3-VL training environment.")
+    if args.prepare_only:
+        return
+    if args.print_command:
+        print(subprocess.list2cmdline(build_verl_sft_command(config)))
+        return
+    checkpoint = launch_verl_sft(config)
+    print(f"latest SFT Hugging Face checkpoint: {checkpoint}")
 
 
 if __name__ == "__main__":

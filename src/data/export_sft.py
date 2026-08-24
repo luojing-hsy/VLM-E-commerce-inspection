@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from src.common import load_yaml, read_jsonl, write_jsonl
-from src.data.split_manifest import SPLITS, lineage_from_sample, manifest_path, write_split_manifests
+from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
 
 PROMPT = "检查商品页是否存在违规，并输出规定字段。"
 
@@ -26,13 +26,14 @@ def target_from_sample(sample: dict) -> dict:
 
 
 def export(config: dict, split: str) -> list[dict]:
-    rows = read_jsonl(manifest_path(config, "samples", split))
+    rows = [row for row in read_jsonl(manifest_path(config, "samples", split)) if row["dataset_stage"] == "sft"]
     counterfactual_path = manifest_path(config, "counterfactuals", split)
     if counterfactual_path.exists():
-        rows += read_jsonl(counterfactual_path)
+        rows += [row for row in read_jsonl(counterfactual_path) if row["dataset_stage"] == "sft"]
     return [
         {
             "sample_id": sample["sample_id"],
+            "dataset_stage": sample["dataset_stage"],
             "split": sample["split"],
             "image": sample["image"],
             "lineage": lineage_from_sample(sample),
@@ -46,8 +47,8 @@ def export(config: dict, split: str) -> list[dict]:
 
 
 def write_exports(config: dict) -> dict[str, Path]:
-    rows = [row for split in SPLITS for row in export(config, split)]
-    return write_split_manifests(config, "sft", rows)
+    rows = [row for split in TRAIN_SPLITS for row in export(config, split)]
+    return write_split_manifests(config, "sft", rows, splits=TRAIN_SPLITS)
 
 
 def main() -> None:

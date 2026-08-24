@@ -16,9 +16,11 @@ def _sft_row(
 ) -> dict:
     return {
         "sample_id": sample_id,
+        "dataset_stage": "sft",
         "split": split,
         "image": image.as_posix(),
         "lineage": {
+            "dataset_stage": "sft",
             "source_product_ids": [product_id],
             "source_image_ids": [source_image_id],
             "derived_image_id": f"page:{sample_id}",
@@ -33,11 +35,16 @@ def _sft_row(
 def _write_sft_config(tmp_path: Path, train: Path, validation: Path) -> Path:
     config = {
         "stage": "sft",
+        "framework": "verl",
         "dataset": train.as_posix(),
         "validation_dataset": validation.as_posix(),
         "output_dir": (tmp_path / "output").as_posix(),
         "precision": "bf16",
         "quantization": "none",
+        "global_train_batch_size": 1,
+        "per_device_train_batch_size": 1,
+        "n_gpus_per_node": 1,
+        "nnodes": 1,
     }
     path = tmp_path / "sft.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -88,10 +95,12 @@ def test_opd_entry_rejects_test_row_in_train_export(tmp_path: Path) -> None:
         [
             {
                 "sample_id": "test-1",
+                "dataset_stage": "opd",
                 "split": "test",
                 "full_image": full_image.as_posix(),
                 "crop_images": [crop_image.as_posix()],
                 "lineage": {
+                    "dataset_stage": "opd",
                     "source_product_ids": ["product-a"],
                     "source_image_ids": ["image-a"],
                     "derived_image_id": "page:test-1",
