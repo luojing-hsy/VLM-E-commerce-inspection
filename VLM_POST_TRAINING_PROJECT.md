@@ -167,7 +167,7 @@ V2 仍采用单标签设计。一个样本只允许一个目标违规；发现�
 | `DUPLICATE_DETAIL_IMAGE` | 将 `detail:2` 替换为 `detail:1`，或施加轻微无语义变换 | `review` | 两张细节图的 `image_pair` |
 | `IMAGE_QUALITY` | 对一个 main/detail 注入模糊、遮挡或低分辨率 | `review` | 受损图片索引和 `issue_subtype` |
 | `WRONG_IMAGE` | 只替换一个 main/detail，其他两图保持原商品 | main: `reject`；detail: `review` | 错误图片索引与至少一张参考图 |
-| `CATEGORY_MISMATCH` | 修改页面 category，图片和其他字段不变 | `reject` | category 文本区与商品图区 |
+| `CATEGORY_MISMATCH` | 修改页面 category；若 title 含可安全识别的同一品类词，则同步修改这些词，图片和其他字段不变 | `reject` | category 文本区与商品图区 |
 | `COLOR_MISMATCH` | 对 eligible 商品修改 color，并同步处理标题中的同一颜色词 | `review` | color 文本区与商品图区 |
 | `MATERIAL_MISMATCH` | 对 eligible 商品把 material 改为不同材质族，并同步处理标题中的同一材质词 | `review` | material 文本区与商品图区 |
 | `TITLE_MISMATCH` | 使用满足隔离条件的错误标题，category/color/material 保持不产生第二冲突 | `reject` | title 区与商品图区 |
@@ -190,7 +190,7 @@ V2 仍采用单标签设计。一个样本只允许一个目标违规；发现�
 
 - `WRONG_IMAGE`：优先使用相同 category、相同可用 color/material 的不同商品，减少附带属性冲突；
 - `TITLE_MISMATCH`：优先使用相同 category，且非空 color/material 与宿主一致的供体标题；
-- `CATEGORY_MISMATCH`：只修改 category 文本，不替换图片；
+- `CATEGORY_MISMATCH`：修改 category 文本；title 中可安全识别的同一品类词同步修改，不替换图片；
 - `COLOR_MISMATCH`、`MATERIAL_MISMATCH`：不使用缺失值作为原值或错误值。
 
 381 个品类中有 83 个单例品类。找不到合格同品类供体时，该商品对 `WRONG_IMAGE` 或 `TITLE_MISMATCH` 记为 ineligible；不得退化为会引入第二标签的跨类供体。若后续建立冻结的 coarse-category taxonomy，可在同一 coarse category 内选择供体，但必须作为新的、可审计的配置。
@@ -200,7 +200,7 @@ V2 仍采用单标签设计。一个样本只允许一个目标违规；发现�
 - 只复制或近复制细节图时，标签固定为 `DUPLICATE_DETAIL_IMAGE`；
 - 只施加退化时，标签固定为 `IMAGE_QUALITY`；
 - 替换一个图片时，只允许标为 `WRONG_IMAGE`，且供体字段必须通过冲突筛查；
-- 只改 category 时标为 `CATEGORY_MISMATCH`；
+- 只改 category 及 title 中同一品类词时标为 `CATEGORY_MISMATCH`；若 title 提及无法安全同步，则该宿主对该类 ineligible；
 - 只改 color 及标题中的同一颜色词时标为 `COLOR_MISMATCH`；
 - 只改 material 及标题中的同一材质词时标为 `MATERIAL_MISMATCH`；
 - 标题整体被替换且其他字段不产生独立冲突时标为 `TITLE_MISMATCH`；
@@ -549,3 +549,5 @@ python -m src.evaluation.evaluate --config configs/eval.yaml
 - 合成冲突评测商品文档一致性、视觉依赖与 grounding，不等同于法律虚假宣传、假货鉴定或平台规则审核；
 - ABO 原图和派生图片受来源许可约束，不进入 GitHub；
 - 全流程不使用 Judge 模型。
+
+
