@@ -1,4 +1,4 @@
-from .schema import AuditPrediction, Evidence
+from .schema import AuditPrediction
 
-__all__ = ["AuditPrediction", "Evidence"]
+__all__ = ["AuditPrediction"]
 

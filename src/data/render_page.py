@@ -16,12 +16,12 @@ from src.data.split_manifest import DATASET_STAGES, TRAIN_SPLITS, read_split_man
 OPD_VIOLATIONS = ("PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT")
 
 VIOLATIONS = (
-    "PASS",
+    "pass",
     "PRODUCT_MISMATCH",
     "ATTRIBUTE_CONFLICT",
     "TEXT_LABEL_CONFLICT",
     "MISSING_REQUIRED_FIELD",
-    "IMAGE_QUALITY",
+    "image_quality",
     "IRRELEVANT_IMAGE",
     "DUPLICATE_IMAGE",
 )
@@ -202,7 +202,7 @@ def render_one(
         gallery_product = gallery_products[gallery_index]
         path = gallery_product["images"][gallery_variants[gallery_index]]
         source_image_ids.add(_source_image_id(gallery_product, gallery_variants[gallery_index]))
-        image = _fit_image(path, box, blur=violation == "IMAGE_QUALITY" and gallery_index == 0)
+        image = _fit_image(path, box, blur=violation == "image_quality" and gallery_index == 0)
         _paste_center(canvas, image, box)
 
     generated_root = Path(config["paths"]["generated"])
@@ -245,7 +245,7 @@ def render_one(
         decision, field, transform = "review", missing_field, "remove_required_field"
         changed_fields = {missing_field: {"original": product["attributes"][missing_field], "modified": None}}
         evidence = [{"role": "missing", "region_type": "missing_field", "field": missing_field, "evidence_source": "rendered_text", "source_field": missing_field}]
-    elif violation == "IMAGE_QUALITY":
+    elif violation == "image_quality":
         decision, transform = "review", "gaussian_blur"
         evidence = [{"role": "damaged_image", "region_type": "image_ref", "image_ref": "gallery:0", "evidence_source": "gallery_relation"}]
     elif violation == "IRRELEVANT_IMAGE":

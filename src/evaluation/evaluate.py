@@ -7,20 +7,13 @@ from pathlib import Path
 from src.common import load_yaml, read_jsonl
 from src.evaluation.counterfactual import counterfactual_metrics
 from src.evaluation.metrics import classification_metrics, perception_metrics
+from src.models.audit_protocol import target_from_sample
 from src.evaluation.slices import slice_summary
 from src.rewards.parser import tolerant_parse
 
 
 def _oracle_prediction(sample: dict) -> dict:
-    return {
-        "schema_version": "1.0",
-        "decision": sample["decision"],
-        "violation_type": sample["violation_type"],
-        "field": sample.get("field"),
-        "listed_value": sample.get("listed_value"),
-        "observed_value": sample.get("observed_value"),
-        "evidence": sample.get("evidence", []),
-    }
+    return target_from_sample(sample)
 
 
 def _load_prediction_map(path: Path) -> tuple[dict[str, dict], float]:
@@ -29,7 +22,7 @@ def _load_prediction_map(path: Path) -> tuple[dict[str, dict], float]:
     valid = 0
     for row in rows:
         result = tolerant_parse(row.get("prediction", {key: value for key, value in row.items() if key != "sample_id"}))
-        parsed[row["sample_id"]] = result.data
+        parsed[row["sample_id"]] = result.data if result.protocol_valid else {}
         valid += result.protocol_valid
     return parsed, valid / len(rows) if rows else 0.0
 
@@ -45,6 +38,8 @@ def evaluate(config: dict, predictions_path: str | None = None, oracle_smoke: bo
         raise ValueError(f"evaluation manifest mixes splits: {wrong_split[:5]}")
     counterfactual_path = Path(config["counterfactual_manifest"])
     counterfactuals = read_jsonl(counterfactual_path) if counterfactual_path.exists() else []
+    for sample in samples + counterfactuals:
+        target_from_sample(sample)
     wrong_cf_split = [row.get("sample_id") for row in counterfactuals if row.get("split") != expected_split]
     if wrong_cf_split:
         raise ValueError(f"counterfactual manifest mixes splits: {wrong_cf_split[:5]}")

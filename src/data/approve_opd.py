@@ -8,7 +8,6 @@ from src.data.export_joint import write_exports as write_joint_exports
 from src.data.split_manifest import TRAIN_SPLITS, manifest_path
 from src.rewards.evidence_reward import evidence_reward
 from src.rewards.parser import tolerant_parse
-from src.rewards.value_reward import normalize_value
 
 
 def _prediction_map(path: str | Path) -> dict[str, object]:
@@ -31,9 +30,10 @@ def approve(row: dict, prediction: object, evidence_threshold: float) -> tuple[b
         return False, "decision_mismatch"
     if candidate.get("violation_type") != target.get("violation_type"):
         return False, "violation_type_mismatch"
-    if normalize_value(candidate.get("observed_value")) != normalize_value(target.get("observed_value")):
-        return False, "observed_value_mismatch"
-    if evidence_reward(target, candidate) < evidence_threshold:
+    if candidate.get("issue_subtype") != target.get("issue_subtype"):
+        return False, "issue_subtype_mismatch"
+    evidence_required = target.get("violation_type") in {"image_quality", "wrong_image"}
+    if evidence_required and evidence_reward(target, candidate) < evidence_threshold:
         return False, "evidence_mismatch"
     return True, "approved"
 

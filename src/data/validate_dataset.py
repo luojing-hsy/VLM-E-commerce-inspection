@@ -11,11 +11,12 @@ from PIL import Image
 from src.common import load_yaml, read_jsonl, sha256_file, stable_hash
 from src.data.prepare_abo import _source_image_path
 from src.data.split_manifest import DATASET_STAGES, SPLITS, assert_stage_source_isolation, manifest_path, read_split_manifests
+from src.models.audit_protocol import target_from_sample
 from src.models.schema import AuditPrediction
 
 
 def _protocol_payload(sample: dict) -> dict:
-    return {key: sample.get(key) for key in ("schema_version", "decision", "violation_type", "field", "listed_value", "observed_value", "evidence")}
+    return target_from_sample(sample)
 
 
 def validate(config: dict) -> dict:
@@ -148,39 +149,11 @@ def validate(config: dict) -> dict:
                 if product.get("dataset_stage") != sample_stage:
                     errors.append(f"sample uses product from another dataset stage: {sample_id} -> {product_id}")
 
-        if sample["violation_type"] == "PASS":
+        if sample["violation_type"] == "pass":
             if sample.get("transform") is not None or sample.get("changed_fields") or sample["evidence"]:
-                errors.append(f"PASS sample contains a transform or evidence: {sample_id}")
+                errors.append(f"pass sample contains a transform or evidence: {sample_id}")
         elif not sample.get("transform"):
             errors.append(f"violation sample has no transform: {sample_id}")
-
-        for evidence in sample["evidence"]:
-            if evidence["region_type"] == "bbox":
-                x1, y1, x2, y2 = evidence["bbox_norm"]
-                if not (0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000):
-                    errors.append(f"out-of-range bbox in {sample_id}")
-                if evidence.get("evidence_source") not in {"rendered_text", "catalog_image"}:
-                    errors.append(f"invalid bbox evidence source in {sample_id}")
-
-        for crop in sample.get("crops", []):
-            crop_path = Path(crop["path"])
-            if crop_path.parent.name != "crops" or not crop_path.name.startswith(f"{sample_id}__crop_"):
-                errors.append(f"crop does not use a flat sample ID filename: {sample_id}")
-            if not crop.get("derived_image_id") or crop.get("parent_derived_image_id") != derived_image_id:
-                errors.append(f"invalid crop lineage in {sample_id}")
-            if not crop_path.exists():
-                errors.append(f"missing crop: {crop_path}")
-                continue
-            width, height = sample["image_size"]
-            tx1, ty1, tx2, ty2 = [
-                round(crop["target_bbox_norm"][0] * width / 1000),
-                round(crop["target_bbox_norm"][1] * height / 1000),
-                round(crop["target_bbox_norm"][2] * width / 1000),
-                round(crop["target_bbox_norm"][3] * height / 1000),
-            ]
-            cx1, cy1, cx2, cy2 = crop["page_bbox_px"]
-            if not (cx1 <= tx1 + 1 and cy1 <= ty1 + 1 and cx2 >= tx2 - 1 and cy2 >= ty2 - 1):
-                errors.append(f"crop does not cover evidence in {sample_id}")
 
     for product_id, splits in source_splits.items():
         if len(splits) > 1:
@@ -208,13 +181,13 @@ def validate(config: dict) -> dict:
     for sample in samples:
         if (
             sample["dataset_stage"] in {"sft", "test"}
-            and sample["violation_type"] in {"PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT"}
+            and sample["violation_type"] != "pass"
         ):
             cf = cf_by_parent.get(sample["sample_id"])
             if cf is None:
                 errors.append(f"missing counterfactual for {sample['sample_id']}")
-            elif cf["decision"] != "pass" or cf["violation_type"] != "PASS":
-                errors.append(f"counterfactual was not restored to PASS: {sample['sample_id']}")
+            elif cf["decision"] != "pass" or cf["violation_type"] != "pass":
+                errors.append(f"counterfactual was not restored to pass: {sample['sample_id']}")
 
     report = {
         "valid": not errors,

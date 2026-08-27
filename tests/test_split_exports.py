@@ -5,6 +5,7 @@ import yaml
 
 from src.common import write_jsonl
 from src.training.runtime import validate_opd_export, validate_stage_config
+from src.models.audit_protocol import prompt_with_image_token
 
 
 def _sft_row(
@@ -18,7 +19,7 @@ def _sft_row(
         "sample_id": sample_id,
         "dataset_stage": "sft",
         "split": split,
-        "image": image.as_posix(),
+        "images": [image.as_posix()] * 3,
         "lineage": {
             "dataset_stage": "sft",
             "source_product_ids": [product_id],
@@ -26,8 +27,8 @@ def _sft_row(
             "derived_image_id": f"page:{sample_id}",
         },
         "conversations": [
-            {"from": "human", "value": "<image>\ncheck"},
-            {"from": "gpt", "value": '{"decision":"pass"}'},
+            {"from": "human", "value": prompt_with_image_token("Sample title", "sample_category", None, None)},
+            {"from": "gpt", "value": '{"decision":"pass","violation_type":"pass","issue_subtype":null,"evidence":null}'},
         ],
     }
 

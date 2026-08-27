@@ -12,12 +12,12 @@ from src.rewards.parser import tolerant_parse
 
 CONSISTENCY_TYPES = {"PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT"}
 V1_TYPES = {
-    "PASS",
+    "pass",
     "PRODUCT_MISMATCH",
     "ATTRIBUTE_CONFLICT",
     "TEXT_LABEL_CONFLICT",
     "MISSING_REQUIRED_FIELD",
-    "IMAGE_QUALITY",
+    "image_quality",
     "IRRELEVANT_IMAGE",
     "DUPLICATE_IMAGE",
 }
@@ -173,7 +173,7 @@ def audit(config: dict, validation_report: dict | None = None) -> dict[str, Any]
     actual_cf = {row["counterfactual_of"] for row in counterfactuals}
     checks["counterfactual_coverage"] = _check(
         "pass" if required_cf == actual_cf else "fail",
-        "Every consistency violation must have exactly one restored PASS counterpart.",
+        "Every consistency violation must have exactly one restored pass counterpart.",
         required=len(required_cf),
         actual=len(actual_cf),
     )

@@ -6,35 +6,37 @@ from pathlib import Path
 
 from src.common import load_yaml, read_jsonl
 from src.data.export_grpo import DATA_SOURCE
-from src.data.export_sft import PROMPT
-from src.data.split_manifest import TRAIN_SPLITS, manifest_path, write_split_manifests
+from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
+from src.models.audit_protocol import product_prompt, structured_prompt
 
 
-TEACHER_PROMPT = (
-    "你是冻结的区域增强教师。结合完整商品页与后续证据裁剪，"
-    "在学生已经生成的前缀上判断下一个结构化输出 token。"
-)
-
-
-def _message(image_paths: list[str], text: str) -> list[dict]:
-    content = [{"type": "image", "image": path} for path in image_paths]
-    content.append({"type": "text", "text": text})
-    return [{"role": "user", "content": content}]
+def _message(image_paths: list[str], row: dict) -> list[dict]:
+    if not isinstance(image_paths, list) or len(image_paths) != 3:
+        raise ValueError(f"joint row must contain main and two detail images: {row.get('sample_id')}")
+    text = product_prompt(
+        row.get("title"),
+        row.get("category"),
+        row.get("color"),
+        row.get("material"),
+        image_placeholders=False,
+    )
+    return structured_prompt(image_paths, text)
 
 
 def _grpo_rows(config: dict, split: str) -> list[dict]:
     rows = read_jsonl(manifest_path(config, "grpo", split))
     exported = []
     for row in rows:
-        image_paths = row.get("images")
-        if not isinstance(image_paths, list) or len(image_paths) != 1:
+        images = row.get("images")
+        if not isinstance(images, list) or len(images) != 3:
             raise ValueError(f"invalid GRPO image list: {row.get('extra_info', {}).get('sample_id')}")
         extra_info = dict(row["extra_info"])
         extra_info["training_stage"] = "joint"
         exported.append(
             {
                 "data_source": DATA_SOURCE,
-                "prompt": _message(image_paths, PROMPT),
+                "prompt": _message(images, row),
+                "images": images,
                 "opd_enabled": False,
                 "reward_model": row["reward_model"],
                 "ability": row.get("ability", "product_audit"),
@@ -50,9 +52,9 @@ def _opd_rows(config: dict, split: str) -> list[dict]:
     for row in rows:
         if row.get("teacher_filter_status") != "approved":
             continue
-        crops = list(row.get("crop_images") or [])
-        if not crops:
-            continue
+        images = row.get("images")
+        if not isinstance(images, list) or len(images) != 3:
+            raise ValueError(f"invalid OPD image list: {row.get('sample_id')}")
         extra_info = {
             "dataset_stage": "opd",
             "training_stage": "joint",
@@ -61,15 +63,21 @@ def _opd_rows(config: dict, split: str) -> list[dict]:
             "lineage": row["lineage"],
             "teacher_filter_status": row.get("teacher_filter_status"),
         }
+        prompt = _message(images, row)
         exported.append(
             {
                 "data_source": DATA_SOURCE,
-                "prompt": _message([row["full_image"]], PROMPT),
-                "teacher_prompt": _message([row["full_image"], *crops], TEACHER_PROMPT),
+                "prompt": prompt,
+                "teacher_prompt": prompt,
+                "images": images,
                 "opd_enabled": True,
                 "reward_model": {
                     "style": "rule",
-                    "ground_truth": json.dumps(row["target"], ensure_ascii=False, separators=(",", ":")),
+                    "ground_truth": json.dumps(
+                        row["target"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 },
                 "ability": "product_audit",
                 "extra_info": extra_info,

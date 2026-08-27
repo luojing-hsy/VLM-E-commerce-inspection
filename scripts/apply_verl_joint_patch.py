@@ -21,20 +21,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PATCH_FILE = PROJECT_ROOT / "patches" / "verl-0.8.0-joint-opd.patch"
 FILE_HASHES = {
     "experimental/agent_loop/agent_loop.py": (
-        "aa4a7b0e58996e119265092b0460ffb2b617d57c416d118d78e2b40aa75e8a7c",
-        "9caaa7239081089f0fae0f758f85765721790a3702989423ce9ee70263dfde6a",
+        "9bcbc04a190ac809baf5225aaf2c98107cc91b6e3996cf46d99387d7050dd195",
+        "061ed20750fcba146063f51fb3338335999704b5882950204340b9c17833c2d2",
     ),
     "experimental/agent_loop/single_turn_agent_loop.py": (
-        "4412fefd8d0039b5e033188bed56fb093d6927826f975bb8f84d5a60d32031cc",
-        "325d2636d697becf98dd1308583c28ed43370d316f7be561f983a6446e14be2b",
+        "066fade7d9c73076937af7d263fb9a1cefb38903c667ced79238ce567323758c",
+        "743bd5aab7e2208de0159e7dfc8757ff2ff2d37bf0eda4c5f91d2cda59304e14",
     ),
     "experimental/teacher_loop/teacher_manager.py": (
-        "5df4b1ff20eb02f6d39d1478c02d8fee1615e67f624ac8f8a4a9cfdd54aa51a0",
-        "e80b58fdf515c7eb60a5c270e823292ae58a085ccc178cdfb57a27cc9cfb76b1",
+        "eb4f991be0575f37479e32e649f3bb15db2bd1ab78db9d3bb0a973a199746ffa",
+        "2fbf2509647e37425e3ac7ddbbe56c1134ebcc794cfd75476c1e2723461bc652",
     ),
     "trainer/distillation/losses.py": (
-        "aa1034da42d15a3980b2383b6fc7a53f9ae6e1f7b7ee75f4f58d8b2c40d4db03",
-        "539abaf765dcd46eb02af3085d428809e2fd6847580d2c179ec79c01005f894b",
+        "8a7a0748d18573083997baef41a5453c256ceb4e1df4b8b2e94f5d02d4a3e7c9",
+        "edab2e98b0535708edf5f786333705ba97dea1ff90058fd9e4a5e466c69f1cd2",
     ),
 }
 
@@ -107,12 +107,22 @@ def apply_patch(verl_dir: Path, target_map: dict[Path, tuple[str, str]]) -> None
             shutil.copy2(path, backup)
         backups[path] = backup
 
-    git_program = shutil.which("git")
-    if git_program is None:
-        raise RuntimeError("the system 'git' executable is required")
+    patch_program = shutil.which("patch")
+    if patch_program is None:
+        raise RuntimeError("the system 'patch' executable is required")
     try:
-        subprocess.run([git_program, "apply", "--check", str(PATCH_FILE)], cwd=verl_dir.parent, check=True)
-        subprocess.run([git_program, "apply", str(PATCH_FILE)], cwd=verl_dir.parent, check=True)
+        with PATCH_FILE.open("rb") as patch_stream:
+            subprocess.run(
+                [patch_program, "--dry-run", "-p1", "-d", str(verl_dir.parent)],
+                stdin=patch_stream,
+                check=True,
+            )
+        with PATCH_FILE.open("rb") as patch_stream:
+            subprocess.run(
+                [patch_program, "-p1", "-d", str(verl_dir.parent)],
+                stdin=patch_stream,
+                check=True,
+            )
         verify_patched(target_map)
     except Exception:
         for path, backup in backups.items():

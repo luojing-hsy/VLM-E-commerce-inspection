@@ -6,23 +6,8 @@ from pathlib import Path
 
 from src.common import load_yaml, read_jsonl, write_jsonl
 from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
+from src.models.audit_protocol import prompt_with_image_token, target_from_sample
 
-PROMPT = "检查商品页是否存在违规，并输出规定字段。"
-
-
-def target_from_sample(sample: dict) -> dict:
-    return {
-        "schema_version": "1.0",
-        "decision": sample["decision"],
-        "violation_type": None if sample["violation_type"] == "PASS" else sample["violation_type"],
-        "field": sample["field"],
-        "listed_value": sample["listed_value"],
-        "observed_value": sample["observed_value"],
-        "evidence": [
-            {key: value for key, value in item.items() if key not in {"value", "evidence_source", "source_field"}}
-            for item in sample["evidence"]
-        ],
-    }
 
 
 def export(config: dict, split: str) -> list[dict]:
@@ -30,20 +15,38 @@ def export(config: dict, split: str) -> list[dict]:
     counterfactual_path = manifest_path(config, "counterfactuals", split)
     if counterfactual_path.exists():
         rows += [row for row in read_jsonl(counterfactual_path) if row["dataset_stage"] == "sft"]
-    return [
-        {
-            "sample_id": sample["sample_id"],
-            "dataset_stage": sample["dataset_stage"],
-            "split": sample["split"],
-            "image": sample["image"],
-            "lineage": lineage_from_sample(sample),
-            "conversations": [
-                {"from": "human", "value": f"<image>\n{PROMPT}"},
-                {"from": "gpt", "value": json.dumps(target_from_sample(sample), ensure_ascii=False, separators=(",", ":"))},
-            ],
-        }
-        for sample in rows
-    ]
+    exported = []
+    for sample in rows:
+        images = sample.get("images")
+        if not isinstance(images, list) or len(images) != 3:
+            raise ValueError(f"SFT row must contain main and two detail images: {sample.get('sample_id')}")
+        prompt = prompt_with_image_token(
+            sample.get("title"),
+            sample.get("category"),
+            sample.get("color"),
+            sample.get("material"),
+        )
+        exported.append(
+            {
+                "sample_id": sample["sample_id"],
+                "dataset_stage": sample["dataset_stage"],
+                "split": sample["split"],
+                "images": images,
+                "lineage": lineage_from_sample(sample),
+                "conversations": [
+                    {"from": "human", "value": prompt},
+                    {
+                        "from": "gpt",
+                        "value": json.dumps(
+                            target_from_sample(sample),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    },
+                ],
+            }
+        )
+    return exported
 
 
 def write_exports(config: dict) -> dict[str, Path]:

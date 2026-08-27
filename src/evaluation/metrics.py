@@ -4,7 +4,6 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from src.rewards.evidence_reward import evidence_reward
-from src.rewards.value_reward import normalize_value
 
 
 def _macro_f1(expected: list[str], predicted: list[str]) -> float:
@@ -20,17 +19,38 @@ def _macro_f1(expected: list[str], predicted: list[str]) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
+def _complete_inspection_success(sample: dict, prediction: dict) -> bool:
+    if prediction.get("decision") != sample.get("decision"):
+        return False
+    violation_type = sample.get("violation_type")
+    if prediction.get("violation_type") != violation_type:
+        return False
+    if violation_type == "image_quality":
+        return (
+            prediction.get("issue_subtype") == sample.get("issue_subtype")
+            and evidence_reward(sample, prediction) == 1.0
+        )
+    if violation_type == "wrong_image":
+        return evidence_reward(sample, prediction) == 1.0
+    return True
+
+
 def classification_metrics(samples: list[dict], predictions: dict[str, dict], config: dict[str, Any]) -> dict[str, Any]:
-    available = [sample for sample in samples if sample["sample_id"] in predictions]
-    if not available:
+    matched = [sample for sample in samples if sample["sample_id"] in predictions]
+    if not matched:
         raise ValueError("no prediction sample_ids matched the manifest")
+    available = samples
     true_decisions = [sample["decision"] for sample in available]
-    pred_decisions = [predictions[sample["sample_id"]].get("decision", "INVALID") for sample in available]
+    pred_decisions = [predictions.get(sample["sample_id"], {}).get("decision", "INVALID") for sample in available]
     true_types = [sample["violation_type"] for sample in available]
-    pred_types = [predictions[sample["sample_id"]].get("violation_type") or "PASS" for sample in available]
+    pred_types = [predictions.get(sample["sample_id"], {}).get("violation_type", "INVALID") for sample in available]
     total = len(available)
     severe = [index for index, value in enumerate(true_decisions) if value == "reject"]
     passes = [index for index, value in enumerate(true_decisions) if value == "pass"]
+    type_successes = [a == b for a, b in zip(true_types, pred_types)]
+    complete_successes = [
+        _complete_inspection_success(sample, predictions.get(sample["sample_id"], {})) for sample in available
+    ]
 
     by_true: dict[str, Counter] = defaultdict(Counter)
     for true, predicted in zip(true_decisions, pred_decisions):
@@ -48,31 +68,34 @@ def classification_metrics(samples: list[dict], predictions: dict[str, dict], co
 
     return {
         "num_evaluated": total,
+        "detection_success_rate": sum(a == b for a, b in zip(true_decisions, pred_decisions)) / total,
+        "violation_detection_success_rate": (
+            sum(pred_decisions[index] == "reject" for index in severe) / len(severe) if severe else None
+        ),
+        "type_inspection_success_probability": sum(type_successes) / total,
+        "complete_inspection_success_probability": sum(complete_successes) / total,
         "decision_accuracy": sum(a == b for a, b in zip(true_decisions, pred_decisions)) / total,
         "violation_macro_f1": _macro_f1(true_types, pred_types),
         "severe_violation_miss_rate": sum(pred_decisions[index] == "pass" for index in severe) / len(severe) if severe else None,
         "false_reject_rate": sum(pred_decisions[index] == "reject" for index in passes) / len(passes) if passes else None,
-        "unnecessary_review_rate": sum(pred_decisions[index] == "review" for index in passes) / len(passes) if passes else None,
         "business_risk": risk,
         "decision_confusion": {true: dict(counter) for true, counter in sorted(by_true.items())},
     }
 
 
 def perception_metrics(samples: list[dict], predictions: dict[str, dict]) -> dict[str, Any]:
-    observed, listed, evidence_scores = [], [], []
+    subtype_scores, evidence_scores = [], []
     for sample in samples:
         prediction = predictions.get(sample["sample_id"])
         if prediction is None:
             continue
-        if sample.get("observed_value") is not None:
-            observed.append(normalize_value(sample["observed_value"]) == normalize_value(prediction.get("observed_value")))
-        if sample.get("listed_value") is not None:
-            listed.append(normalize_value(sample["listed_value"]) == normalize_value(prediction.get("listed_value")))
-        if sample.get("evidence"):
+        if sample.get("violation_type") == "image_quality":
+            subtype_scores.append(sample.get("issue_subtype") == prediction.get("issue_subtype"))
+        if sample.get("violation_type") in {"image_quality", "wrong_image"}:
             evidence_scores.append(evidence_reward(sample, prediction))
     return {
-        "observed_value_exact_match": sum(observed) / len(observed) if observed else None,
-        "listed_value_exact_match": sum(listed) / len(listed) if listed else None,
+        "quality_subtype_accuracy": sum(subtype_scores) / len(subtype_scores) if subtype_scores else None,
+        "image_ref_accuracy": sum(evidence_scores) / len(evidence_scores) if evidence_scores else None,
         "evidence_mean_score": sum(evidence_scores) / len(evidence_scores) if evidence_scores else None,
         "evidence_recall_at_0_5": sum(score >= 0.5 for score in evidence_scores) / len(evidence_scores) if evidence_scores else None,
     }

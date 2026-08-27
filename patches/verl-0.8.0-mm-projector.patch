@@ -1,0 +1,67 @@
+diff --git a/verl/workers/config/model.py b/verl/workers/config/model.py
+--- a/verl/workers/config/model.py
++++ b/verl/workers/config/model.py
+@@ -122,1 +122,8 @@ class HFModelConfig(BaseConfig):
++    # VLM_PRODUCT_AUDIT_MM_PROJECTOR_PATCH_V1
++    # Keep the vision encoder frozen during project-specific SFT.
++    freeze_vision_encoder: bool = True
++
++    # Train Qwen3-VL's visual merger (the MM projector) with the language LoRA.
++    train_mm_projector: bool = False
++
+     # TODO: unify fsdp and megatron lora config
+diff --git a/verl/workers/engine/fsdp/transformer_impl.py b/verl/workers/engine/fsdp/transformer_impl.py
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -340,1 +340,34 @@ class FSDPEngine(BaseEngine):
++    @staticmethod
++    def _has_module_path(name: str, *components: str) -> bool:
++        parts = name.split(".")
++        width = len(components)
++        return any(
++            parts[index : index + width] == list(components)
++            for index in range(len(parts) - width + 1)
++        )
++
++    def _configure_mm_projector_training(self, module):
++        if self.model_config.freeze_vision_encoder:
++            for name, parameter in module.named_parameters():
++                if self._has_module_path(name, "visual"):
++                    parameter.requires_grad = False
++
++        if not self.model_config.train_mm_projector:
++            return
++
++        projector_parameters = [
++            (name, parameter)
++            for name, parameter in module.named_parameters()
++            if self._has_module_path(name, "visual", "merger")
++        ]
++        if not projector_parameters:
++            raise ValueError("train_mm_projector=True but no visual.merger parameters were found")
++
++        for _, parameter in projector_parameters:
++            parameter.requires_grad = True
++        logger.info(
++            "Enabled MM projector training for %d parameters while keeping vision encoder frozen",
++            len(projector_parameters),
++        )
++
+     def _build_fsdp_module(self, module):
+@@ -548,5 +574,6 @@ class FSDPEngine(BaseEngine):
+         # Apply LoRA adapters if low-rank adaptation is enabled
+         if self._is_lora:
+             module = self._build_lora_module(module)
++        self._configure_mm_projector_training(module)
+ 
+         # Apply QAT before FSDP wrapping (training only)
+@@ -819,1 +846,9 @@ class FSDPEngine(BaseEngine):
++                if self.model_config.train_mm_projector:
++                    params.update(
++                        {
++                            name: parameter
++                            for name, parameter in self.module.state_dict().items()
++                            if self._has_module_path(name, "visual", "merger")
++                        }
++                    )
+             else:  # merge lora

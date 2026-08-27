@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.metadata
-import json
 import sys
 
 
@@ -19,14 +18,13 @@ EXPECTED = {
     "qwen-vl-utils": "0.0.14",
     "ray": "2.56.1",
     "tensordict": "0.10.0",
-    "torch": "2.11.0",
-    "torchaudio": "2.11.0",
-    "torchvision": "0.26.0",
-    "transformers": "5.15.0.dev0",
+    "torch": "2.9.0",
+    "torchaudio": "2.9.0",
+    "torchvision": "0.24.0",
+    "transformers": "4.57.1",
     "verl": "0.8.0",
-    "vllm": "0.25.1",
+    "vllm": "0.12.0",
 }
-TRANSFORMERS_COMMIT = "7ea2320c76117e6742364808a666ef6f2fb40a67"
 
 
 def main() -> None:
@@ -36,25 +34,20 @@ def main() -> None:
     mismatches = []
     for distribution, expected in EXPECTED.items():
         actual = importlib.metadata.version(distribution)
-        if actual != expected:
+        if actual.split("+", maxsplit=1)[0] != expected:
             mismatches.append(f"{distribution}: expected {expected}, got {actual}")
     if mismatches:
         raise SystemExit("training stack version mismatch:\n" + "\n".join(mismatches))
 
-    direct_url_text = importlib.metadata.distribution("transformers").read_text("direct_url.json")
-    if direct_url_text is None:
-        raise SystemExit("transformers direct_url.json is missing; cannot verify the pinned commit")
-    direct_url = json.loads(direct_url_text)
-    actual_commit = direct_url.get("vcs_info", {}).get("commit_id")
-    if actual_commit != TRANSFORMERS_COMMIT:
-        raise SystemExit(
-            f"transformers commit mismatch: expected {TRANSFORMERS_COMMIT}, got {actual_commit}"
-        )
+    import torch
+
+    if torch.version.cuda != "12.8":
+        raise SystemExit(f"expected a CUDA 12.8 PyTorch build, got CUDA {torch.version.cuda}")
 
     from transformers import AutoProcessor, Qwen3VLForConditionalGeneration  # noqa: F401
 
     print("verified fixed SFT/veRL/vLLM package versions")
-    print(f"transformers commit: {actual_commit}")
+    print(f"PyTorch CUDA runtime: {torch.version.cuda}")
 
 
 if __name__ == "__main__":

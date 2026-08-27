@@ -1,0 +1,36 @@
+--- a/verl/trainer/sft_trainer.py
++++ b/verl/trainer/sft_trainer.py
+@@
+ import os
+ import time
+ from functools import partial
++from numbers import Number
+@@
+ from verl.utils.logger import log_with_rank
++from verl.utils.metric import Metric
+@@
+ logger = logging.getLogger(__file__)
+ logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
+ 
+ 
++def _aggregate_sft_metric(value):
++    if isinstance(value, Metric):
++        return value.aggregate()
++    if isinstance(value, (list, tuple)):
++        values = [_aggregate_sft_metric(item) for item in value]
++        if values and all(isinstance(item, Number) for item in values):
++            return sum(values) / len(values)
++        return values
++    return value
++
++
+ class SFTTrainer:
+@@
+-                    metrics = tu.get(output, "metrics")
++                    metrics = tu.get(output, "metrics")
+@@
+-                            value = metrics.pop(k)
++                            value = _aggregate_sft_metric(metrics.pop(k))
+@@
+-                                    val_metric_values[name].append(metrics[name])
++                                    val_metric_values[name].append(_aggregate_sft_metric(metrics[name]))

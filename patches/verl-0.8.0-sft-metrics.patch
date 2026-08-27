@@ -1,0 +1,95 @@
+diff --git a/verl/workers/engine/fsdp/transformer_impl.py b/verl/workers/engine/fsdp/transformer_impl.py
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -660,2 +660,9 @@
+         tu.assign_non_tensor(data, batch_num_tokens=batch_num_tokens.item())
++        # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++        if "semantic_loss_mask" in data:
++            batch_num_semantic_tokens = data["semantic_loss_mask"].sum().to(get_device_id())
++            torch.distributed.all_reduce(
++                batch_num_semantic_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
++            )
++            tu.assign_non_tensor(data, batch_num_semantic_tokens=batch_num_semantic_tokens.item())
+         tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
+diff --git a/verl/workers/utils/losses.py b/verl/workers/utils/losses.py
+--- a/verl/workers/utils/losses.py
++++ b/verl/workers/utils/losses.py
+@@ -33,1 +33,3 @@
+     log_prob = model_output["log_probs"]
++    # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++    semantic_loss = None
+@@ -49,2 +51,8 @@
+         loss = -masked_sum(log_prob_flatten, loss_mask_flatten) / batch_num_tokens * dp_size
++        if "semantic_loss_mask" in data:
++            semantic_loss_mask = torch.roll(data["semantic_loss_mask"].values(), shifts=-1, dims=0)
++            semantic_token_count = data["batch_num_semantic_tokens"]
++            if semantic_token_count <= 0:
++                raise ValueError("semantic_loss_mask contains no active tokens")
++            semantic_loss = -masked_sum(log_prob_flatten, semantic_loss_mask) / semantic_token_count * dp_size
+     else:
+@@ -54,1 +62,5 @@
+-    return loss, {}
++    metrics = {"full_completion_loss": Metric(value=loss.detach(), aggregation=AggregationType.SUM)}
++    if semantic_loss is not None:
++        metrics["semantic_token_loss"] = Metric(value=semantic_loss.detach(), aggregation=AggregationType.SUM)
++
++    return loss, metrics
+diff --git a/verl/trainer/sft_trainer.py b/verl/trainer/sft_trainer.py
+--- a/verl/trainer/sft_trainer.py
++++ b/verl/trainer/sft_trainer.py
+@@ -394,1 +394,2 @@
+-                    for k in ["loss", "grad_norm", "lr", "mfu"]:
++                    # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++                    for k in ["loss", "full_completion_loss", "semantic_token_loss", "grad_norm", "lr", "mfu"]:
+@@ -415,20 +416,36 @@
+-                    val_losses = []
++                    val_metric_values = {
++                        "loss": [],
++                        "full_completion_loss": [],
++                        "semantic_token_loss": [],
++                    }
+                     for val_data in self.val_dataloader:
+                         val_data = tu.get_tensordict(tensor_dict=val_data, non_tensor_dict=meta_info)
+                         output = self.training_client.infer_batch(val_data)
+ 
+                         if self.engine.is_mp_src_rank_with_outputs():
+                             metrics = tu.get(output, "metrics")
+-                            val_losses.append(metrics["loss"])
++                            for name in val_metric_values:
++                                if name in metrics:
++                                    val_metric_values[name].append(metrics[name])
+ 
++                    reduced_val_metrics = {}
+                     if self.engine.is_mp_src_rank_with_outputs():
+-                        val_loss = torch.mean(torch.tensor(val_losses, device=self.device_name))
+-                        # average over data parallel group
+                         dp_group = self.engine.get_data_parallel_group()
+-                        if dp_group is not None:
+-                            torch.distributed.all_reduce(val_loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
++                        for name, values in val_metric_values.items():
++                            if not values:
++                                continue
++                            value = torch.mean(
++                                torch.tensor(values, device=self.device_name)
++                            )
++                            if dp_group is not None:
++                                torch.distributed.all_reduce(
++                                    value,
++                                    op=torch.distributed.ReduceOp.AVG,
++                                    group=dp_group,
++                                )
++                            reduced_val_metrics[f"val/{name}"] = value.detach().item()
+ 
+                     if is_logging:
+-                        metric = {"val/loss": val_loss.detach().item()}
++                        metric = reduced_val_metrics
+                         tracking.log(data=metric, step=global_step)
+                         last_valid_metric = metric
+
+diff --git a/verl/utils/tracking.py b/verl/utils/tracking.py
+--- a/verl/utils/tracking.py
++++ b/verl/utils/tracking.py
+@@ -283,1 +283,2 @@
+-        self.fp = open(self.filepath, "wb", buffering=0)
++        # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++        self.fp = open(self.filepath, "ab", buffering=0)

@@ -25,7 +25,7 @@ def build_counterfactuals(config: dict, samples: list[dict] | None = None) -> li
         row = render_one(
             product,
             product,
-            "PASS",
+            "pass",
             sample["split"],
             f"{sample['sample_id']}_cf",
             template_id,

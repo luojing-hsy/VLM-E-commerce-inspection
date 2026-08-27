@@ -4,39 +4,44 @@ import argparse
 from pathlib import Path
 
 from src.common import load_yaml, read_jsonl
-from src.data.export_sft import PROMPT, target_from_sample
+from src.models.audit_protocol import VIOLATION_TYPES, product_prompt, target_from_sample
 from src.data.split_manifest import TRAIN_SPLITS, lineage_from_sample, manifest_path, write_split_manifests
 
-ALLOWED_TYPES = {"PRODUCT_MISMATCH", "ATTRIBUTE_CONFLICT", "TEXT_LABEL_CONFLICT"}
+ALLOWED_TYPES = VIOLATION_TYPES
 
 
 def export(config: dict, split: str) -> list[dict]:
     rows = read_jsonl(manifest_path(config, "samples", split))
-    return [
-        {
-            "sample_id": row["sample_id"],
-            "dataset_stage": row["dataset_stage"],
-            "split": row["split"],
-            "full_image": row["image"],
-            "crop_images": [crop["path"] for crop in row.get("crops", [])],
-            "lineage": lineage_from_sample(row),
-            "crop_lineage": [
-                {
-                    "derived_image_id": crop["derived_image_id"],
-                    "parent_derived_image_id": crop["parent_derived_image_id"],
-                    "source_image_ids": crop["source_image_ids"],
-                }
-                for crop in row.get("crops", [])
-            ],
-            "prompt": PROMPT,
-            "target": target_from_sample(row),
-            "teacher_filter_status": "pending_model_inference",
-        }
-        for row in rows
-        if row["dataset_stage"] == "opd"
-        and row["violation_type"] in ALLOWED_TYPES
-        and row.get("crops")
-    ]
+    exported = []
+    for row in rows:
+        images = row.get("images")
+        if not isinstance(images, list) or len(images) != 3:
+            raise ValueError(f"OPD row must contain main and two detail images: {row.get('sample_id')}")
+        if row["dataset_stage"] != "opd" or row["violation_type"] not in ALLOWED_TYPES:
+            continue
+        exported.append(
+            {
+                "sample_id": row["sample_id"],
+                "dataset_stage": row["dataset_stage"],
+                "split": row["split"],
+                "images": images,
+                "title": row.get("title"),
+                "category": row.get("category"),
+                "color": row.get("color"),
+                "material": row.get("material"),
+                "lineage": lineage_from_sample(row),
+                "prompt_text": product_prompt(
+                    row.get("title"),
+                    row.get("category"),
+                    row.get("color"),
+                    row.get("material"),
+                    image_placeholders=False,
+                ),
+                "target": target_from_sample(row),
+                "teacher_filter_status": "pending_model_inference",
+            }
+        )
+    return exported
 
 
 def write_exports(config: dict) -> dict[str, Path]:

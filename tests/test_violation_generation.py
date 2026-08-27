@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from PIL import Image
+import pytest
+
 
 from src.data.prepare_products import build_products
 from src.data.render_page import VIOLATIONS, render_one
@@ -23,7 +25,7 @@ def _config(tmp_path: Path) -> dict:
     }
 
 
-def test_all_v1_violations_render_and_validate(tmp_path: Path) -> None:
+def test_legacy_v1_renderer_outputs_are_rejected_by_v2_schema(tmp_path: Path) -> None:
     config = _config(tmp_path)
     first, donor = build_products(config)
     for index, violation in enumerate(VIOLATIONS):
@@ -33,10 +35,11 @@ def test_all_v1_violations_render_and_validate(tmp_path: Path) -> None:
         assert Path(row["image"]).name == f"{row['sample_id']}.png"
         with Image.open(row["image"]) as image:
             assert image.size == (960, 720)
-        AuditPrediction.model_validate(
-            {key: row[key] for key in ("schema_version", "decision", "violation_type", "field", "listed_value", "observed_value", "evidence")}
-        )
-        if violation == "PASS":
+        with pytest.raises(ValueError):
+            AuditPrediction.model_validate(
+                {key: row[key] for key in ("schema_version", "decision", "violation_type", "field", "listed_value", "observed_value", "evidence")}
+            )
+        if violation == "pass":
             assert row["decision"] == "pass" and not row["evidence"]
         else:
             assert row["transform"] and row["evidence"]

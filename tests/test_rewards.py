@@ -3,7 +3,7 @@ from pathlib import Path
 
 from src.common import load_yaml
 from src.rewards.composite import compute_reward
-from src.rewards.evidence_reward import bbox_iou
+from src.rewards.evidence_reward import evidence_reward
 from src.rewards.parser import tolerant_parse
 from src.rewards.verl_reward import compute_score as verl_compute_score
 
@@ -14,19 +14,14 @@ JOINT_CONFIG = PROJECT_ROOT / "configs" / "joint.yaml"
 def _sample() -> dict:
     return {
         "decision": "reject",
-        "violation_type": "ATTRIBUTE_CONFLICT",
-        "field": "model",
-        "listed_value": "Model Y",
-        "observed_value": "Model X",
-        "evidence": [
-            {"role": "listed_value", "image_ref": "page", "region_type": "bbox", "bbox_norm": [100, 100, 300, 200]},
-            {"role": "observed_value", "image_ref": "page", "region_type": "bbox", "bbox_norm": [500, 500, 700, 600]},
-        ],
+        "violation_type": "image_quality",
+        "issue_subtype": "blur",
+        "evidence": "main",
     }
 
 
 def _prediction() -> dict:
-    return {"schema_version": "1.0", **_sample()}
+    return dict(_sample())
 
 
 def test_perfect_prediction_gets_full_reward() -> None:
@@ -37,7 +32,7 @@ def test_perfect_prediction_gets_full_reward() -> None:
 
 def test_missing_evidence_activates_gate() -> None:
     prediction = _prediction()
-    prediction["evidence"] = []
+    prediction["evidence"] = None
     result = compute_reward(_sample(), prediction, load_yaml(JOINT_CONFIG))
     assert result["reward"] <= 0.45
     assert result["evidence_gate_applied"]
@@ -49,14 +44,17 @@ def test_invalid_output_has_non_executable_action() -> None:
     assert not result["protocol_valid"]
 
 
-def test_parser_accepts_code_fence_and_key_order() -> None:
+def test_parser_rejects_code_fence_but_accepts_key_order() -> None:
     text = "result:\n```json\n" + json.dumps(_prediction()) + "\n```"
-    assert tolerant_parse(text).protocol_valid
+    assert not tolerant_parse(text).protocol_valid
+    reordered = {key: _prediction()[key] for key in reversed(_prediction())}
+    assert tolerant_parse(reordered).protocol_valid
 
 
-def test_iou_is_continuous() -> None:
-    assert bbox_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
-    assert 0 < bbox_iou([0, 0, 10, 10], [5, 0, 15, 10]) < 1
+def test_evidence_requires_exact_image_ref() -> None:
+    assert evidence_reward(_sample(), _prediction()) == 1.0
+    wrong = {**_prediction(), "evidence": "detail:1"}
+    assert evidence_reward(_sample(), wrong) == 0.0
 
 
 def test_verl_reward_adapter_preserves_components() -> None:

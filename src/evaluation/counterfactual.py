@@ -15,8 +15,8 @@ def counterfactual_metrics(originals: list[dict], counterfactuals: list[dict], p
             original_prediction.get("decision") == original["decision"]
             and original_prediction.get("violation_type") == original["violation_type"]
         )
-        cf_type = cf_prediction.get("violation_type") or "PASS"
-        cf_ok = cf_prediction.get("decision") == "pass" and cf_type == "PASS"
+        cf_type = cf_prediction.get("violation_type")
+        cf_ok = cf_prediction.get("decision") == "pass" and cf_type == "pass"
         pair_scores.append(1.0 if original_ok and cf_ok else 0.2 if original_ok or cf_ok else 0.0)
         flips.append(original_prediction.get("decision") != cf_prediction.get("decision"))
     return {

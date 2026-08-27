@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -10,7 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from src.models.audit_protocol import PROMPT, assert_model_text_is_sanitized, validate_prediction_dict, validate_product_prompt
 from src.common import load_yaml, read_jsonl, sha256_file
+from src.training.checkpoint_export import normalize_hf_checkpoint
 
 
 @dataclass
@@ -83,14 +86,21 @@ def validate_sft_export(path: str | Path, expected_split: str) -> ExportIds:
             raise ValueError(
                 f"SFT row {sample_id} has split={row.get('split')}; expected split={expected_split}"
             )
-        image = row.get("image")
+        images = row.get("images")
         conversations = row.get("conversations")
-        if not isinstance(image, str) or not Path(image).exists():
-            raise FileNotFoundError(f"SFT image does not exist: {image}")
+        if not isinstance(images, list) or len(images) != 3:
+            raise ValueError(f"SFT row must contain main and two detail images: {sample_id}")
+        missing_images = [path for path in images if not isinstance(path, str) or not Path(path).exists()]
+        if missing_images:
+            raise FileNotFoundError(f"SFT image does not exist: {missing_images[0]}")
         if not isinstance(conversations, list) or len(conversations) != 2:
             raise ValueError(f"invalid SFT conversations: {sample_id}")
-        if "<image>" not in str(conversations[0].get("value", "")):
-            raise ValueError(f"SFT prompt is missing image token: {sample_id}")
+        if conversations[0].get("from") != "human":
+            raise ValueError(f"SFT prompt is not canonical: {sample_id}")
+        validate_product_prompt(conversations[0].get("value"), image_placeholders=3)
+        if conversations[1].get("from") != "gpt" or not isinstance(conversations[1].get("value"), str):
+            raise ValueError(f"invalid SFT target message: {sample_id}")
+        validate_prediction_dict(json.loads(conversations[1]["value"]))
         _record_lineage(ids, row, sample_id, path)
     return ids
 
@@ -110,14 +120,8 @@ def validate_opd_export(path: str | Path, expected_split: str) -> ExportIds:
                 f"OPD row {sample_id} has split={row.get('split')}; expected split={expected_split}"
             )
         full_image = row.get("full_image")
-        crop_images = row.get("crop_images")
         if not isinstance(full_image, str) or not Path(full_image).exists():
             raise FileNotFoundError(f"OPD full image does not exist: {full_image}")
-        if not isinstance(crop_images, list) or not crop_images:
-            raise ValueError(f"OPD row has no crop images: {sample_id}")
-        missing_crops = [value for value in crop_images if not Path(value).exists()]
-        if missing_crops:
-            raise FileNotFoundError(f"OPD crop image does not exist: {missing_crops[0]}")
         _record_lineage(ids, row, sample_id, path)
     return ids
 
@@ -140,6 +144,12 @@ def assert_verl_grpo_config(config: dict) -> None:
 def assert_verl_sft_config(config: dict) -> None:
     if config.get("framework") != "verl":
         raise ValueError("SFT requires framework=verl")
+    freeze_vision_encoder = config.get("freeze_vision_encoder", True)
+    train_mm_projector = config.get("train_mm_projector", False)
+    if not isinstance(freeze_vision_encoder, bool) or not isinstance(train_mm_projector, bool):
+        raise ValueError("SFT vision/projector flags must be boolean")
+    if train_mm_projector and not freeze_vision_encoder:
+        raise ValueError("SFT MM projector training requires freeze_vision_encoder=true")
     global_batch = int(config.get("global_train_batch_size", 0))
     micro_batch = int(config.get("per_device_train_batch_size", 0))
     world_size = int(config.get("n_gpus_per_node", 0)) * int(config.get("nnodes", 0))
@@ -150,6 +160,16 @@ def assert_verl_sft_config(config: dict) -> None:
 
 
 def assert_joint_config(config: dict) -> None:
+    _assert_resume_config(config)
+
+def _assert_resume_config(config: dict) -> None:
+    resume_mode = config.get("resume_mode", "auto")
+    if resume_mode not in {"auto", "disable", "resume_path"}:
+        raise ValueError("resume_mode must be auto, disable, or resume_path")
+    if resume_mode == "resume_path":
+        resume_path = config.get("resume_from_path")
+        if not resume_path or not Path(resume_path).is_dir():
+            raise FileNotFoundError(f"resume checkpoint does not exist: {resume_path}")
     assert_verl_grpo_config(config)
     opd = config.get("opd")
     if not isinstance(opd, dict) or opd.get("loss_mode") != "forward_kl_topk":
@@ -164,6 +184,8 @@ def assert_joint_config(config: dict) -> None:
     teacher_tp = int(config["teacher_tensor_model_parallel_size"])
     if teacher_world_size < 1 or teacher_world_size % teacher_tp:
         raise ValueError("teacher world size must be positive and divisible by teacher tensor parallel size")
+    if "file" in config.get("loggers", []) and not config.get("log_file"):
+        raise ValueError("joint file logging requires log_file")
 
 
 def assert_lora_targets(module_names: Iterable[str], targets: Iterable[str]) -> list[str]:
@@ -210,13 +232,13 @@ def validate_verl_export(path: str | Path, expected_split: str) -> ExportIds:
         prompt = row.get("prompt")
         images = row.get("images")
         reward_model = row.get("reward_model", {})
-        if not prompt or "<image>" not in prompt[0].get("content", "") or not images or len(images) != 1:
-            raise ValueError(f"invalid multimodal veRL row: {sample_id}")
-        if not Path(images[0]).exists():
-            raise FileNotFoundError(f"veRL image does not exist: {images[0]}")
-        ground_truth = json.loads(reward_model.get("ground_truth", ""))
-        if not isinstance(ground_truth, dict) or "decision" not in ground_truth:
-            raise ValueError(f"invalid veRL ground truth: {sample_id}")
+        prompt_images = _structured_image_paths(prompt)
+        if not isinstance(images, list) or len(images) != 3 or prompt_images != images:
+            raise ValueError(f"veRL row must contain the same three product images in prompt and images: {sample_id}")
+        missing_images = [path for path in images if not isinstance(path, str) or not Path(path).exists()]
+        if missing_images:
+            raise FileNotFoundError(f"veRL image does not exist: {missing_images[0]}")
+        validate_prediction_dict(json.loads(reward_model.get("ground_truth", "")))
         _record_lineage(ids, extra_info, sample_id, path)
     return ids
 
@@ -230,11 +252,21 @@ def _structured_image_paths(messages: object) -> list[str]:
     content = message.get("content")
     if not isinstance(content, list):
         raise ValueError("multimodal prompt content must be structured")
-    paths = [part.get("image") for part in content if isinstance(part, dict) and part.get("type") == "image"]
-    if not paths or not all(isinstance(path, str) and path for path in paths):
+    image_parts = [
+        part for part in content
+        if isinstance(part, dict) and part.get("type") == "image"
+    ]
+    text_parts = [
+        part.get("text") for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
+    ]
+    if len(image_parts) != 3 or len(text_parts) != 1:
+        raise ValueError("multimodal prompt must contain three images and one product prompt")
+    paths = [part.get("image") for part in image_parts]
+    if not all(isinstance(path, str) and path for path in paths):
         raise ValueError("multimodal prompt must contain image paths")
-    if not any(isinstance(part, dict) and part.get("type") == "text" for part in content):
-        raise ValueError("multimodal prompt must contain text")
+    validate_product_prompt(text_parts[0], image_placeholders=0)
+    assert_model_text_is_sanitized(messages)
     return paths
 
 
@@ -256,8 +288,8 @@ def validate_joint_export(path: str | Path, expected_split: str) -> ExportIds:
         subpools.add(str(dataset_stage))
 
         student_images = _structured_image_paths(row.get("prompt"))
-        if len(student_images) != 1:
-            raise ValueError(f"joint student must see exactly one full page: {sample_id}")
+        if len(student_images) != 3:
+            raise ValueError(f"joint student must see main and two detail images: {sample_id}")
         for image_path in student_images:
             if not Path(image_path).exists():
                 raise FileNotFoundError(f"joint student image does not exist: {image_path}")
@@ -269,21 +301,16 @@ def validate_joint_export(path: str | Path, expected_split: str) -> ExportIds:
             if dataset_stage != "opd":
                 raise ValueError(f"only OPD subpool rows may enable distillation: {sample_id}")
             teacher_images = _structured_image_paths(row.get("teacher_prompt"))
-            if len(teacher_images) < 2 or teacher_images[0] != student_images[0]:
-                raise ValueError(f"teacher prompt must contain the full page followed by crops: {sample_id}")
-            for image_path in teacher_images:
-                if not Path(image_path).exists():
-                    raise FileNotFoundError(f"joint teacher image does not exist: {image_path}")
+            if teacher_images != student_images or row.get("teacher_prompt") != row.get("prompt"):
+                raise ValueError(f"teacher and student must receive the same three images and prompt: {sample_id}")
         elif dataset_stage != "grpo":
             raise ValueError(f"OPD subpool row must enable distillation: {sample_id}")
 
-        ground_truth = json.loads(row.get("reward_model", {}).get("ground_truth", ""))
-        if not isinstance(ground_truth, dict) or "decision" not in ground_truth:
-            raise ValueError(f"invalid joint ground truth: {sample_id}")
+        validate_prediction_dict(json.loads(row.get("reward_model", {}).get("ground_truth", "")))
         _record_lineage(ids, extra_info, sample_id, path)
 
-    if subpools != {"grpo", "opd"}:
-        raise ValueError(f"joint {expected_split} export must include GRPO and OPD subpools")
+    if "grpo" not in subpools:
+        raise ValueError(f"joint {expected_split} export must include a GRPO subpool")
     return ids
 
 
@@ -365,6 +392,8 @@ def validate_stage_config(config_path: str | Path, stage: str) -> dict:
 
 
 def _hydra_value(value: object) -> str:
+    if value is None:
+        return "null"
     if isinstance(value, bool):
         return "True" if value else "False"
     if isinstance(value, (list, dict)):
@@ -378,14 +407,26 @@ def build_verl_sft_command(config: dict, executable: str = "python") -> list[str
         "data.train_files": config["dataset_parquet"],
         "data.val_files": config["validation_dataset_parquet"],
         "data.train_batch_size": config["global_train_batch_size"],
+        # VLM_PRODUCT_AUDIT_SFT_REQUEST_CONFIG_V1
+        "data.train_max_samples": config.get("train_max_samples", -1),
+        "data.val_max_samples": config.get("validation_max_samples", -1),
+        "data.enable_thinking_key": config.get("enable_thinking_key", "__disabled_enable_thinking__"),
+        "data.enable_thinking_default": config.get("enable_thinking_default"),
         "data.micro_batch_size_per_gpu": config["per_device_train_batch_size"],
         "data.max_length": config["max_sequence_length"],
         "data.max_token_len_per_gpu": config["max_token_len_per_gpu"],
         "data.pad_mode": "no_padding",
+        "data.custom_cls.path": config["semantic_dataset_class_path"],
+        "data.custom_cls.name": "SemanticMultiTurnSFTDataset",
         "data.truncation": "error",
         "data.use_dynamic_bsz": True,
         "model.path": config["model_name_or_path"],
+        "+model.override_config.attn_implementation": config.get("override_config", {}).get("attn_implementation", "flash_attention_2"),
+        "+model.override_config.min_pixels": config.get("override_config", {}).get("min_pixels", config.get("min_pixels", 784)),
+        "+model.override_config.max_pixels": config.get("override_config", {}).get("max_pixels", config.get("max_pixels", 50176)),
         "model.enable_gradient_checkpointing": config["gradient_checkpointing"],
+        "+model.freeze_vision_encoder": config.get("freeze_vision_encoder", True),
+        "+model.train_mm_projector": config.get("train_mm_projector", False),
         "model.use_remove_padding": True,
         "model.lora_rank": config["lora_r"],
         "model.lora_alpha": config["lora_alpha"],
@@ -401,13 +442,18 @@ def build_verl_sft_command(config: dict, executable: str = "python") -> list[str
         "trainer.n_gpus_per_node": config["n_gpus_per_node"],
         "trainer.nnodes": config["nnodes"],
         "trainer.default_local_dir": config["output_dir"],
+        "hydra.run.dir": config["output_dir"],
         "trainer.save_freq": config["save_freq"],
         "trainer.test_freq": config["test_freq"],
-        "trainer.logger": ["console"],
+        "trainer.max_ckpt_to_keep": config["max_ckpt_to_keep"],
+        "trainer.resume_mode": config["resume_mode"],
+        "trainer.resume_from_path": config.get("resume_from_path"),
+        "trainer.logger": config["loggers"],
         "trainer.project_name": config["project_name"],
         "trainer.experiment_name": config["experiment_name"],
         "trainer.total_epochs": config["num_train_epochs"],
         "checkpoint.save_contents": ["model", "optimizer", "extra", "hf_model"],
+        "checkpoint.load_contents": ["model", "optimizer", "extra", "hf_model"],
     }
     distributed = [
         executable, "-m", "torch.distributed.run", "--standalone",
@@ -462,7 +508,10 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "reward.custom_reward_function.reward_kwargs.reward_config_path": config.get(
             "reward_config_path", "configs/joint.yaml"
         ),
-        "trainer.logger": ["console"],
+        "trainer.logger": config.get("loggers", ["console"]),
+        "trainer.resume_mode": config.get("resume_mode", "auto"),
+        "trainer.resume_from_path": config.get("resume_from_path"),
+        "trainer.max_actor_ckpt_to_keep": config.get("max_actor_ckpt_to_keep"),
         "trainer.project_name": config["project_name"],
         "trainer.experiment_name": config["experiment_name"],
         "trainer.n_gpus_per_node": config["n_gpus_per_node"],
@@ -500,6 +549,24 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
     return [executable, "-m", config["entrypoint"], *(f"{key}={_hydra_value(value)}" for key, value in overrides.items())]
 
 
+def apply_resume_options(config: dict, resume_from: str | None, restart: bool) -> None:
+    if resume_from:
+        config["resume_mode"] = "resume_path"
+        config["resume_from_path"] = str(Path(resume_from).resolve())
+    elif restart:
+        config["resume_mode"] = "disable"
+        config["resume_from_path"] = None
+
+
+def _tracking_environment(config: dict) -> dict[str, str]:
+    env = os.environ.copy()
+    if "file" in config.get("loggers", []):
+        log_path = Path(config["log_file"]).resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        env["VERL_FILE_LOGGER_PATH"] = str(log_path)
+    return env
+
+
 def launch_verl(config: dict) -> None:
     if platform.system() != "Linux":
         raise RuntimeError("veRL GPU training must be launched from a supported Linux CUDA environment")
@@ -515,7 +582,7 @@ def launch_verl(config: dict) -> None:
             raise FileNotFoundError(f"SFT student checkpoint does not exist: {student}")
         if not teacher.exists():
             raise FileNotFoundError(f"frozen SFT teacher checkpoint does not exist: {teacher}")
-    subprocess.run(build_verl_command(config, sys.executable), check=True)
+    subprocess.run(build_verl_command(config, sys.executable), check=True, env=_tracking_environment(config))
 
 
 def record_latest_sft_checkpoint(output_dir: str | Path) -> Path:
@@ -535,6 +602,7 @@ def record_latest_sft_checkpoint(output_dir: str | Path) -> Path:
             return -1
 
     latest_checkpoint = max(candidates, key=step)
+    normalize_hf_checkpoint(latest_checkpoint / "huggingface")
     alias = root / "latest"
     if alias.is_symlink():
         alias.unlink()
@@ -549,11 +617,31 @@ def launch_verl_sft(config: dict) -> Path:
         raise RuntimeError("veRL GPU training must be launched from a supported Linux CUDA environment")
     if importlib.util.find_spec("verl") is None:
         raise RuntimeError("veRL is not installed; run scripts/setup.sh first")
-    from src.data.export_verl_sft import write_parquet
+    from src.data.export_verl_sft import write_parquet_if_needed
 
-    write_parquet(config["dataset"], config["dataset_parquet"])
-    write_parquet(config["validation_dataset"], config["validation_dataset_parquet"])
-    subprocess.run(build_verl_sft_command(config, sys.executable), check=True)
+    parquet_pairs = [
+        (
+            config.get("full_dataset", config["dataset"]),
+            config.get("full_dataset_parquet", config["dataset_parquet"]),
+        ),
+        (
+            config.get("full_validation_dataset", config["validation_dataset"]),
+            config.get("full_validation_dataset_parquet", config["validation_dataset_parquet"]),
+        ),
+        (config["dataset"], config["dataset_parquet"]),
+        (config["validation_dataset"], config["validation_dataset_parquet"]),
+    ]
+    seen_pairs = set()
+    for source, target in parquet_pairs:
+        pair = (str(source), str(target))
+        if pair in seen_pairs:
+            continue
+        write_parquet_if_needed(source, target)
+        seen_pairs.add(pair)
+    from src.training.sft_progress import ensure_sft_progress_hook
+
+    ensure_sft_progress_hook()
+    subprocess.run(build_verl_sft_command(config, sys.executable), check=True, env=_tracking_environment(config))
     return record_latest_sft_checkpoint(config["output_dir"])
 
 
