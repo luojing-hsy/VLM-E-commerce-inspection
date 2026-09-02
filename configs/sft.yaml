@@ -7,9 +7,6 @@ override_config: {attn_implementation: sdpa, min_pixels: 784, max_pixels: 65536}
 apply_chat_template_kwargs: {enable_thinking: false}
 source_dataset: data/sft/train.jsonl
 validation_source_dataset: data/sft/valid.jsonl
-pages_root: outputs/sft/runtime
-page_width: 960
-page_height: 720
 # Default active variant for smoke testing.
 dataset: outputs/sft/runtime/full_1000/sft_train.jsonl
 validation_dataset: outputs/sft/runtime/full_1000/sft_validation.jsonl

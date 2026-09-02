@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from src.data.prepare_abo import _source_image_path
-from src.data.render_page import _split_for, _template_for_split
+from src.data.split_manifest import stable_split_for
 from src.data.split_manifest import assert_stage_source_isolation, stage_assignment_for_component
 from src.training.runtime import assert_lora_targets, assert_standard_lora_config, assert_verl_grpo_config, build_verl_command
 
@@ -17,7 +17,7 @@ def test_abo_source_image_id_is_used_as_flat_filename() -> None:
 
 
 def test_source_component_stage_assignment_is_stable() -> None:
-    ratios = {"sft": 0.50, "grpo": 0.25, "opd": 0.15, "test": 0.10}
+    ratios = {"sft": 0.50, "grpo": 0.40, "test": 0.10}
 
     first = stage_assignment_for_component("component-a", 42, ratios)
 
@@ -36,16 +36,8 @@ def test_stage_source_image_overlap_is_rejected() -> None:
 
 def test_split_is_stable_for_same_family_and_seed() -> None:
     ratios = {"train": 0.8, "validation": 0.1, "test": 0.1}
-    first = _split_for("family-a", 42, ratios)
-    assert first == _split_for("family-a", 42, ratios)
-
-
-def test_test_template_is_held_out_from_training() -> None:
-    train_templates = {_template_for_split("train", index) for index in range(20)}
-    test_templates = {_template_for_split("test", index) for index in range(20)}
-    assert train_templates == {0, 1, 2}
-    assert test_templates == {3}
-    assert train_templates.isdisjoint(test_templates)
+    first = stable_split_for("family-a", 42, ratios)
+    assert first == stable_split_for("family-a", 42, ratios)
 
 
 def test_verl_generation_group_contract() -> None:
@@ -61,25 +53,23 @@ def test_verl_generation_group_contract() -> None:
     )
 
 
-def test_joint_command_uses_grpo_opd_and_custom_reward() -> None:
+def test_grpo_command_uses_grpo_and_custom_reward() -> None:
     from src.common import load_yaml
 
-    command = build_verl_command(load_yaml("configs/joint.yaml"))
+    command = build_verl_command(load_yaml("configs/grpo.yaml"))
     assert "-m" in command and "verl.trainer.main_ppo" in command
     assert "algorithm.adv_estimator=grpo" in command
-    assert "distillation.enabled=True" in command
     assert "reward.custom_reward_function.name=compute_score" in command
-    assert not any("trl" in item.lower() for item in command)
+    assert not any("distillation" in item.lower() or "teacher" in item.lower() for item in command)
 
 
-def test_joint_stage_initializes_student_and_teacher_from_sft() -> None:
+def test_grpo_config_starts_from_sft_checkpoint() -> None:
     from src.common import load_yaml
 
-    joint = load_yaml("configs/joint.yaml")
-    assert joint["stage"] == "joint"
-    assert joint["model_name_or_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
-    assert joint["teacher_model_path"] == joint["model_name_or_path"]
-    assert joint["opd"]["use_task_rewards"] is True
+    grpo = load_yaml("configs/grpo.yaml")
+    assert grpo["stage"] == "grpo"
+    assert grpo["model_name_or_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
+    assert grpo["reward_config_path"] == "configs/grpo.yaml"
 
 
 def test_lora_scope_rejects_visual_modules() -> None:

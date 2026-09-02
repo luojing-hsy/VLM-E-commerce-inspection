@@ -32,13 +32,11 @@ resolve_path() {
   fi
 }
 if pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[s]ft" >/dev/null 2>&1 \
-  || pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[j]oint" >/dev/null 2>&1 \
-  || pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[g]rpo_on_joint" >/dev/null 2>&1; then
+  || pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[g]rpo" >/dev/null 2>&1; then
   echo "A project training process is already running under ${ROOT}; refusing a concurrent evaluation." >&2
   exit 1
 fi
 MANIFEST="$(resolve_path "$(read_config_value "${CONFIG}" "manifest")")"
-COUNTERFACTUAL_MANIFEST="$(resolve_path "$(read_config_value "${CONFIG}" "counterfactual_manifest")")"
 CONFIG_PREDICTIONS="$(resolve_path "$(read_config_value "${CONFIG}" "predictions")")"
 PREDICTIONS="${BASEMODEL_PREDICTIONS:-${CONFIG_PREDICTIONS}}"
 if [[ "${PREDICTIONS}" != /* ]]; then
@@ -66,14 +64,14 @@ if [[ "${BASEMODEL_NO_LOG:-0}" != "1" ]]; then
   echo "Base-model evaluation log: ${LOG_FILE}"
 fi
 if [[ ! -f "${MANIFEST}" ]]; then
-  "${PYTHON}" -m src.data.prepare_synthesis --stage eval --config "${CONFIG}"
+  "${PYTHON}" -m src.data.prepare_dataset --stage eval --config "${CONFIG}"
 fi
 if [[ ! -f "${MANIFEST}" ]]; then
   echo "Evaluation manifest was not created: ${MANIFEST}" >&2
   exit 1
 fi
 prediction_matches_manifest() {
-  "${PYTHON}" - "${MANIFEST}" "${COUNTERFACTUAL_MANIFEST}" "${PREDICTIONS}" <<'PY'
+  "${PYTHON}" - "${MANIFEST}" "${PREDICTIONS}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -94,8 +92,8 @@ def ids(path):
         seen.add(sample_id)
         result.append(sample_id)
     return result
-expected = ids(sys.argv[1]) + ids(sys.argv[2])
-actual = ids(sys.argv[3])
+expected = ids(sys.argv[1])
+actual = ids(sys.argv[2])
 if not expected or len(expected) != len(actual) or set(expected) != set(actual):
     raise SystemExit(1)
 PY

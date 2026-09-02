@@ -1,21 +1,13 @@
 seed: 42
 source_mode: abo_rendered_audit
 num_products: 3000
-samples_per_product:
-  sft: 4
-  grpo: 2
-  opd: 2
-  test: 2
-page_width: 960
-page_height: 720
-# Source components are assigned to exactly one stage before pages are rendered.
+# Source components are assigned to exactly one stage before split manifests are written.
 dataset_stage_ratios:
   sft: 0.50
-  grpo: 0.25
-  opd: 0.15
+  grpo: 0.40
   test: 0.10
 stage_validation_ratio: 0.10
-# Retained only for the synthetic test fixture path.
+# Stage ratios are used for source-data partitioning.
 split_ratios:
   train: 0.80
   validation: 0.10
@@ -23,7 +15,6 @@ split_ratios:
 paths:
   raw_images: data/raw/images
   abo_root: data/raw/abo
-  generated: data/generated
   manifests: data/manifests
 abo:
   locale: en_US

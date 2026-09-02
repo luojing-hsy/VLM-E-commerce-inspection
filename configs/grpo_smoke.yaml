@@ -1,33 +1,24 @@
-stage: joint
+stage: grpo
+override_config: {attn_implementation: sdpa}
 framework: verl
 entrypoint: verl.trainer.main_ppo
-source_dataset: data/joint/train.jsonl
-validation_source_dataset: data/joint/valid.jsonl
-pages_root: outputs/joint/runtime
-page_width: 960
-page_height: 720
+source_dataset: data/GRPO/train.jsonl
+validation_source_dataset: data/GRPO/valid.jsonl
+dataset: outputs/grpo/smoke/runtime/grpo_smoke_train.jsonl
+validation_dataset: outputs/grpo/smoke/runtime/grpo_smoke_validation.jsonl
 min_pixels: 784
-max_pixels: 65536
-override_config: {attn_implementation: sdpa}
 require_gated_deltanet_kernels: true
+max_pixels: 65536
 enable_thinking: false
-hf_export_root: outputs/joint/hf_exports
-latest_alias: outputs/joint/latest
-run_validation_after_training: true
-validation_eval_config: configs/eval.yaml
-validation_manifest: outputs/joint/validation_manifest.jsonl
-validation_predictions: outputs/joint/validation_predictions.jsonl
-validation_metrics: outputs/joint/validation_metrics.json
-validation_batch_size: 8
-post_training_validation_max_samples: 100
 apply_chat_template_kwargs: {enable_thinking: false}
 mm_processor_kwargs: {min_pixels: 784, max_pixels: 65536}
-dataset: outputs/joint/runtime/joint_train.jsonl
-validation_dataset: outputs/joint/runtime/joint_validation.jsonl
-output_dir: outputs/joint
+hf_export_root: outputs/grpo/smoke/hf_exports
+latest_alias: outputs/grpo/smoke/latest
+hf_latest_alias: outputs/grpo/smoke/hf_latest
+output_dir: outputs/grpo/smoke
+export_hf_checkpoint: true
 model_name_or_path: outputs/sft_qwen35_4b/latest/huggingface
 lora_adapter_path: null
-teacher_model_path: outputs/sft_qwen35_4b/latest/huggingface
 precision: bf16
 quantization: none
 learning_rate: 2.0e-6
@@ -43,6 +34,12 @@ actor_strategy: fsdp2
 rollout_backend: vllm
 rollout_tensor_model_parallel_size: 1
 rollout_gpu_memory_utilization: 0.35
+rollout_enforce_eager: true
+rollout_max_model_len: 4096
+rollout_max_num_seqs: 4
+rollout_max_num_batched_tokens: 2048
+rollout_agent_num_workers: 4
+actor_use_remove_padding: false
 actor_param_offload: true
 actor_optimizer_offload: true
 ref_param_offload: true
@@ -54,29 +51,20 @@ lora_alpha: 32
 lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
 n_gpus_per_node: 1
 nnodes: 1
-teacher_n_gpus_per_node: 1
-teacher_nnodes: 1
-teacher_tensor_model_parallel_size: 1
-teacher_gpu_memory_utilization: 0.45
 total_epochs: 1
-save_freq: 50
-test_freq: 50
-max_actor_ckpt_to_keep: 3
-resume_mode: auto
+save_freq: 200
+test_freq: 200
+max_actor_ckpt_to_keep: 1
+resume_mode: disable
 resume_from_path: null
 loggers: [console, file]
-log_file: outputs/joint/training_metrics.jsonl
+log_file: outputs/grpo/smoke/training_metrics.jsonl
 project_name: vlm_product_audit
-experiment_name: qwen3_5_4b_joint_grpo_opd
+experiment_name: qwen3_5_4b_grpo_smoke
 reward_function_path: src/rewards/verl_reward.py
 reward_function_name: compute_score
-reward_config_path: configs/joint.yaml
-opd:
-  loss_mode: forward_kl_topk
-  top_k_logits: 64
-  loss_coefficient: 0.25
-  use_task_rewards: true
-  use_policy_gradient: false
+reward_config_path: configs/grpo.yaml
+prepare_max_samples: 8
 reward_weights:
   action: 0.30
   type: 0.35

@@ -1,11 +1,7 @@
 schema_version: "2.0"
 dataset_split: test
 source_dataset: data/test/test.jsonl
-pages_root: outputs/test
-page_width: 960
-page_height: 720
-manifest: outputs/test/samples_test.jsonl
-counterfactual_manifest: outputs/test/counterfactuals_test.jsonl
+manifest: outputs/test/manifest_test.jsonl
 predictions: outputs/test/predictions.jsonl
 output: outputs/test/metrics.json
 min_pixels: 784
@@ -22,7 +18,5 @@ cost_matrix:
 # Freeze these after collecting the base-model validation baseline.
 frozen_thresholds:
   configured: false
-  opd_non_inferiority_margin: null
-  opd_business_risk_non_inferiority_margin: null
   min_gap_improvement: null
   min_business_risk_improvement: null
