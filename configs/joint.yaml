@@ -6,12 +6,28 @@ validation_source_dataset: data/joint/valid.jsonl
 pages_root: outputs/joint/runtime
 page_width: 960
 page_height: 720
+min_pixels: 784
+max_pixels: 65536
+override_config: {attn_implementation: sdpa}
+require_gated_deltanet_kernels: true
+enable_thinking: false
+hf_export_root: outputs/joint/hf_exports
+latest_alias: outputs/joint/latest
+run_validation_after_training: true
+validation_eval_config: configs/eval.yaml
+validation_manifest: outputs/joint/validation_manifest.jsonl
+validation_predictions: outputs/joint/validation_predictions.jsonl
+validation_metrics: outputs/joint/validation_metrics.json
+validation_batch_size: 8
+post_training_validation_max_samples: 100
+apply_chat_template_kwargs: {enable_thinking: false}
+mm_processor_kwargs: {min_pixels: 784, max_pixels: 65536}
 dataset: outputs/joint/runtime/joint_train.jsonl
 validation_dataset: outputs/joint/runtime/joint_validation.jsonl
 output_dir: outputs/joint
-model_name_or_path: outputs/sft/latest/huggingface
+model_name_or_path: outputs/sft_qwen35_4b/latest/huggingface
 lora_adapter_path: null
-teacher_model_path: outputs/sft/latest/huggingface
+teacher_model_path: outputs/sft_qwen35_4b/latest/huggingface
 precision: bf16
 quantization: none
 learning_rate: 2.0e-6
@@ -43,15 +59,15 @@ teacher_nnodes: 1
 teacher_tensor_model_parallel_size: 1
 teacher_gpu_memory_utilization: 0.45
 total_epochs: 1
-save_freq: 20
-test_freq: 5
+save_freq: 50
+test_freq: 50
 max_actor_ckpt_to_keep: 3
 resume_mode: auto
 resume_from_path: null
 loggers: [console, file]
 log_file: outputs/joint/training_metrics.jsonl
 project_name: vlm_product_audit
-experiment_name: qwen3_vl_4b_joint_grpo_opd
+experiment_name: qwen3_5_4b_joint_grpo_opd
 reward_function_path: src/rewards/verl_reward.py
 reward_function_name: compute_score
 reward_config_path: configs/joint.yaml
@@ -62,12 +78,12 @@ opd:
   use_task_rewards: true
   use_policy_gradient: false
 reward_weights:
-  action: 0.40
-  type: 0.20
-  evidence: 0.25
+  action: 0.30
+  type: 0.35
+  evidence: 0.20
   subtype: 0.15
 evidence_gate_threshold: 0.30
-evidence_gate_cap: 0.45
+evidence_gate_multiplier: 0.70
 cost_matrix:
-  pass: {pass: 0.0, reject: 0.9}
+  pass: {pass: 0.0, reject: 0.75}
   reject: {pass: 1.0, reject: 0.0}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the verified veRL 0.8.0 Qwen3-VL MM projector SFT patch."""
+"""Apply the verified veRL 0.8.0 multimodal projector SFT patch."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 EXPECTED_VERL_VERSION = "0.8.0"
-EXPECTED_PATCH_SHA256 = "36590c96c43b6e55bb49538033c970ece8dc0e33f87f96898c239fd525efe454"
+EXPECTED_PATCH_SHA256 = "34c9bed36ab5f4bdec948d7bd75cb4cc2634299e2ea6353ea3b00612f593d119"
 PATCH_MARKER = "VLM_PRODUCT_AUDIT_MM_PROJECTOR_PATCH_V1"
 BACKUP_SUFFIX = ".vlm-mm-projector.orig"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

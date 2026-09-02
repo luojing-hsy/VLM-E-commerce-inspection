@@ -77,7 +77,7 @@ def test_joint_stage_initializes_student_and_teacher_from_sft() -> None:
 
     joint = load_yaml("configs/joint.yaml")
     assert joint["stage"] == "joint"
-    assert joint["model_name_or_path"] == "outputs/sft/latest/huggingface"
+    assert joint["model_name_or_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
     assert joint["teacher_model_path"] == joint["model_name_or_path"]
     assert joint["opd"]["use_task_rewards"] is True
 

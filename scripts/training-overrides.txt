@@ -1,3 +1,3 @@
-# veRL 0.8.0 declares numpy<2, while the verified vLLM 0.12.0 stack resolves
+# veRL 0.8.0 declares numpy<2, while the verified vLLM 0.20.2 stack resolves
 # with NumPy 2.2.6. Keep the same explicit uv override as the reference stack.
 numpy==2.2.6

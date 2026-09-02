@@ -1,2 +1,2 @@
-"""Qwen3-VL product-page auditing project."""
+"""Qwen3.5 product-page auditing project."""
 

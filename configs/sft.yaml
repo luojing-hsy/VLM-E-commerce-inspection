@@ -1,27 +1,29 @@
 stage: sft
 framework: verl
 entrypoint: verl.trainer.sft_trainer
-model_name_or_path: /root/autodl-tmp/models/Qwen3-VL-4B-Instruct
-override_config: {attn_implementation: sdpa, min_pixels: 10000, max_pixels: 65536}
+model_name_or_path: /root/autodl-tmp/models/Qwen3.5-4B
+require_gated_deltanet_kernels: true
+override_config: {attn_implementation: sdpa, min_pixels: 784, max_pixels: 65536}
+apply_chat_template_kwargs: {enable_thinking: false}
 source_dataset: data/sft/train.jsonl
 validation_source_dataset: data/sft/valid.jsonl
 pages_root: outputs/sft/runtime
 page_width: 960
 page_height: 720
 # Default active variant for smoke testing.
-dataset: outputs/sft/runtime/test_100/sft_train.jsonl
-validation_dataset: outputs/sft/runtime/test_100/sft_validation.jsonl
-dataset_parquet: outputs/sft/runtime/test_100/sft_train.parquet
-validation_dataset_parquet: outputs/sft/runtime/test_100/sft_validation.parquet
-active_train_max_samples: 100
-active_validation_max_samples: 10
+dataset: outputs/sft/runtime/full_1000/sft_train.jsonl
+validation_dataset: outputs/sft/runtime/full_1000/sft_validation.jsonl
+dataset_parquet: outputs/sft/runtime/full_1000/sft_train.parquet
+validation_dataset_parquet: outputs/sft/runtime/full_1000/sft_validation.parquet
+active_train_max_samples: 1000
+active_validation_max_samples: 100
 
 # Full current SFT dataset.
 full_dataset: outputs/sft/runtime/full_1000/sft_train.jsonl
 full_validation_dataset: outputs/sft/runtime/full_1000/sft_validation.jsonl
 full_dataset_parquet: outputs/sft/runtime/full_1000/sft_train.parquet
 full_validation_dataset_parquet: outputs/sft/runtime/full_1000/sft_validation.parquet
-output_dir: outputs/sft
+output_dir: outputs/sft_qwen35_4b
 precision: bf16
 quantization: none
 gradient_checkpointing: true
@@ -38,33 +40,33 @@ num_train_epochs: 1
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 global_train_batch_size: 10
-train_max_samples: 100
-validation_max_samples: 10
+train_max_samples: 1000
+validation_max_samples: 100
 run_validation_after_training: true
 validation_eval_config: configs/eval.yaml
-validation_manifest: outputs/sft/validation_manifest.jsonl
-validation_predictions: outputs/sft/validation_predictions.jsonl
-validation_metrics: outputs/sft/validation_metrics.json
+validation_manifest: outputs/sft_qwen35_4b/validation_manifest.jsonl
+validation_predictions: outputs/sft_qwen35_4b/validation_predictions.jsonl
+validation_metrics: outputs/sft_qwen35_4b/validation_metrics.json
 validation_batch_size: 8
-post_training_validation_max_samples: 10
+post_training_validation_max_samples: 100
 enable_thinking_key: __disabled_enable_thinking__
-enable_thinking_default: null
+enable_thinking_default: false
 max_sequence_length: 2048
 max_token_len_per_gpu: 2048
 max_output_length: 256
-min_pixels: 10000
+min_pixels: 784
 max_pixels: 65536
 n_gpus_per_node: 1
 nnodes: 1
 fsdp_size: -1
-save_freq: 25
+save_freq: 50
 test_freq: 50
-max_ckpt_to_keep: 3
-resume_mode: auto
+max_ckpt_to_keep: 1
+resume_mode: disable
 resume_from_path: null
 loggers: [console, file]
-log_file: outputs/sft/training_metrics.jsonl
+log_file: outputs/sft_qwen35_4b/training_metrics.jsonl
 progress_log_every_samples: 20
 semantic_dataset_class_path: src/training/sft_dataset.py
 project_name: vlm_product_audit
-experiment_name: qwen3_vl_4b_sft
+experiment_name: qwen3_5_4b_sft

@@ -8,13 +8,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFile, ImageFont, ImageOps
-
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from src.common import load_yaml, read_jsonl
 from src.evaluation.metrics import classification_metrics, perception_metrics
 from src.models.audit_protocol import PROMPT, product_prompt, structured_prompt, target_from_sample
+from src.models.hf_loader import load_multimodal_components
 from src.rewards.parser import tolerant_parse
 
 
@@ -237,20 +236,34 @@ def run(args: argparse.Namespace) -> dict:
     pending = [sample for sample in samples if sample["sample_id"] not in raw_predictions]
     inference_seconds = None
     peak_allocated_gib = None
+    processor_load_seconds = None
+    model_load_seconds = None
+    model_type = None
+    gated_deltanet_backend = None
     if pending:
         import torch
-        from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-        processor = AutoProcessor.from_pretrained(
+        components = load_multimodal_components(
             args.model,
-            min_pixels=int(config.get("min_pixels", 784)),
-            max_pixels=int(config.get("max_pixels", 50176)),
+            dtype=torch.bfloat16,
+            processor_kwargs={
+                "min_pixels": int(config.get("min_pixels", 784)),
+                "max_pixels": int(config.get("max_pixels", 50176)),
+            },
+            require_fast_kernels=bool(config.get("require_gated_deltanet_kernels", True)),
+            use_hub_kernels=bool(config.get("use_hub_kernels", False)),
         )
+        processor = components.processor
+        model = components.model
         processor.tokenizer.padding_side = "left"
-        model = Qwen3VLForConditionalGeneration.from_pretrained(
-            args.model,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
+        processor_load_seconds = components.processor_load_seconds
+        model_load_seconds = components.model_load_seconds
+        model_type = components.model_type
+        gated_deltanet_backend = components.gated_deltanet_backend
+        print(
+            f"loaded {model_type}: processor={processor_load_seconds:.3f}s "
+            f"model={model_load_seconds:.3f}s gated_deltanet={gated_deltanet_backend}",
+            flush=True,
         )
         model.eval()
         if args.batch_size < 1:
@@ -310,6 +323,10 @@ def run(args: argparse.Namespace) -> dict:
     report["inference_seconds"] = round(inference_seconds, 3) if inference_seconds is not None else None
     report["seconds_per_sample"] = round(inference_seconds / len(pending), 3) if inference_seconds is not None else None
     report["peak_allocated_gib"] = round(peak_allocated_gib, 3) if peak_allocated_gib is not None else None
+    report["processor_load_seconds"] = round(processor_load_seconds, 3) if processor_load_seconds is not None else None
+    report["model_load_seconds"] = round(model_load_seconds, 3) if model_load_seconds is not None else None
+    report["model_type"] = model_type
+    report["gated_deltanet_backend"] = gated_deltanet_backend
     metrics_path = Path(args.metrics)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -329,10 +346,10 @@ def run(args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate Qwen3-VL on synthesis JSONL with one rendered product page")
+    parser = argparse.ArgumentParser(description="Evaluate a multimodal Qwen checkpoint on product-audit JSONL")
     parser.add_argument("--config", default="configs/eval.yaml")
     parser.add_argument("--dataset", default="data/test/test.jsonl")
-    parser.add_argument("--model", default="Qwen/Qwen3-VL-4B-Instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.5-4B")
     parser.add_argument("--pages", default="data/test")
     parser.add_argument("--predictions", default="outputs/baseline/test_predictions.jsonl")
     parser.add_argument("--metrics", default="outputs/baseline/test_metrics.json")
