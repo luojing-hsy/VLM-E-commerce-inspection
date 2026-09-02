@@ -148,9 +148,14 @@ def _convert_sharded_checkpoint(source: Path, target: Path, lora_rank: int, lora
     _copy_non_weight_files(source, target)
 
 
-def normalize_hf_checkpoint(checkpoint_dir: str | Path) -> Path:
+def normalize_hf_checkpoint(
+    checkpoint_dir: str | Path, *, keep_raw_backup: bool = False
+) -> Path:
     """Make a veRL LoRA HF export loadable as a normal merged HF model."""
     source = Path(checkpoint_dir)
+    backup = source.with_name(source.name + ".peft_raw")
+    if not keep_raw_backup and backup.exists():
+        shutil.rmtree(backup)
     index_path = source / "model.safetensors.index.json"
     if not index_path.is_file():
         return source
@@ -165,15 +170,26 @@ def normalize_hf_checkpoint(checkpoint_dir: str | Path) -> Path:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     lora_rank = int(meta["r"])
     lora_alpha = int(meta["lora_alpha"])
-    backup = source.with_name(source.name + ".peft_raw")
-    if backup.exists():
+    if keep_raw_backup and backup.exists():
         raise FileExistsError(f"refusing to overwrite checkpoint backup: {backup}")
 
+    replaced = source.with_name(source.name + ".replace_tmp")
+    if replaced.exists():
+        raise FileExistsError(f"refusing to overwrite checkpoint swap directory: {replaced}")
     temporary = Path(tempfile.mkdtemp(prefix=f"{source.name}.standard.", dir=source.parent))
     try:
         _convert_sharded_checkpoint(source, temporary, lora_rank, lora_alpha)
-        source.rename(backup)
-        temporary.rename(source)
+        if keep_raw_backup:
+            source.rename(backup)
+            temporary.rename(source)
+        else:
+            source.rename(replaced)
+            try:
+                temporary.rename(source)
+            except Exception:
+                replaced.rename(source)
+                raise
+            shutil.rmtree(replaced)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise

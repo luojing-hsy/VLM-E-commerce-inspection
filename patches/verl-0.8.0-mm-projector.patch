@@ -6,7 +6,7 @@ diff --git a/verl/workers/config/model.py b/verl/workers/config/model.py
 +    # Keep the vision encoder frozen during project-specific SFT.
 +    freeze_vision_encoder: bool = True
 +
-+    # Train Qwen3-VL's visual merger (the MM projector) with the language LoRA.
++    # Train Qwen3.5's visual merger (the MM projector) with the language LoRA.
 +    train_mm_projector: bool = False
 +
      # TODO: unify fsdp and megatron lora config

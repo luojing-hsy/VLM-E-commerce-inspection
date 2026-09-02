@@ -1,21 +1,23 @@
 schema_version: "2.0"
 dataset_split: test
 source_dataset: data/test/test.jsonl
-pages_root: outputs/evaluation
+pages_root: outputs/test
 page_width: 960
 page_height: 720
-manifest: outputs/evaluation/samples_test.jsonl
-counterfactual_manifest: outputs/evaluation/counterfactuals_test.jsonl
-predictions: outputs/evaluation/predictions.jsonl
-output: outputs/evaluation/metrics.json
+manifest: outputs/test/samples_test.jsonl
+counterfactual_manifest: outputs/test/counterfactuals_test.jsonl
+predictions: outputs/test/predictions.jsonl
+output: outputs/test/metrics.json
 min_pixels: 784
 max_pixels: 65536
 max_new_tokens: 256
 target_class_prior:
   pass: 0.60
   reject: 0.40
+require_gated_deltanet_kernels: true
+use_hub_kernels: false
 cost_matrix:
-  pass: {pass: 0.0, reject: 0.9}
+  pass: {pass: 0.0, reject: 0.75}
   reject: {pass: 1.0, reject: 0.0}
 # Freeze these after collecting the base-model validation baseline.
 frozen_thresholds:

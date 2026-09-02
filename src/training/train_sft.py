@@ -49,7 +49,7 @@ def _run_validation(config: dict, checkpoint: Path, training_seconds: float) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Launch Qwen3-VL BF16 LoRA + MM projector SFT with veRL")
+    parser = argparse.ArgumentParser(description="Launch Qwen3.5 BF16 LoRA + MM projector SFT with veRL")
     parser.add_argument("--config", default="configs/sft.yaml")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-only", action="store_true", help="validate JSONL inputs and write run metadata")

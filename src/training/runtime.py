@@ -8,10 +8,15 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Iterable
 
+from packaging.version import Version
+from src.data.export_grpo_from_joint import validate_image_files
+
 from src.models.audit_protocol import PROMPT, assert_model_text_is_sanitized, validate_prediction_dict, validate_product_prompt
+from src.models.hf_loader import QWEN35_MODEL_TYPES, require_fast_gated_deltanet_kernels
 from src.common import load_yaml, read_jsonl, sha256_file
 from src.training.checkpoint_export import normalize_hf_checkpoint
 
@@ -240,6 +245,7 @@ def validate_verl_export(path: str | Path, expected_split: str) -> ExportIds:
             raise FileNotFoundError(f"veRL image does not exist: {missing_images[0]}")
         validate_prediction_dict(json.loads(reward_model.get("ground_truth", "")))
         _record_lineage(ids, extra_info, sample_id, path)
+    validate_image_files(rows)
     return ids
 
 
@@ -252,22 +258,30 @@ def _structured_image_paths(messages: object) -> list[str]:
     content = message.get("content")
     if not isinstance(content, list):
         raise ValueError("multimodal prompt content must be structured")
-    image_parts = [
-        part for part in content
-        if isinstance(part, dict) and part.get("type") == "image"
-    ]
-    text_parts = [
-        part.get("text") for part in content
-        if isinstance(part, dict) and part.get("type") == "text"
-    ]
-    if len(image_parts) != 3 or len(text_parts) != 1:
-        raise ValueError("multimodal prompt must contain three images and one product prompt")
-    paths = [part.get("image") for part in image_parts]
+    expected_labels = ("main: ", "\ndetail:1: ", "\ndetail:2: ")
+    if len(content) != 7:
+        raise ValueError("multimodal prompt must contain three role-tagged images and one product prompt")
+    paths: list[object] = []
+    for index, label in enumerate(expected_labels):
+        text_part = content[index * 2]
+        image_part = content[index * 2 + 1]
+        if (
+            not isinstance(text_part, dict)
+            or text_part.get("type") != "text"
+            or text_part.get("text") != label
+            or not isinstance(image_part, dict)
+            or image_part.get("type") != "image"
+        ):
+            raise ValueError("multimodal prompt image roles must be main, detail:1, detail:2 in order")
+        paths.append(image_part.get("image"))
+    final_text = content[-1]
+    if not isinstance(final_text, dict) or final_text.get("type") != "text":
+        raise ValueError("multimodal prompt must end with one product prompt")
     if not all(isinstance(path, str) and path for path in paths):
         raise ValueError("multimodal prompt must contain image paths")
-    validate_product_prompt(text_parts[0], image_placeholders=0)
+    validate_product_prompt(final_text.get("text"), image_placeholders=0)
     assert_model_text_is_sanitized(messages)
-    return paths
+    return [path for path in paths if isinstance(path, str)]
 
 
 def validate_joint_export(path: str | Path, expected_split: str) -> ExportIds:
@@ -297,12 +311,12 @@ def validate_joint_export(path: str | Path, expected_split: str) -> ExportIds:
         opd_enabled = row.get("opd_enabled")
         if not isinstance(opd_enabled, bool):
             raise ValueError(f"joint row {sample_id} is missing boolean opd_enabled")
+        teacher_images = _structured_image_paths(row.get("teacher_prompt"))
+        if teacher_images != student_images or row.get("teacher_prompt") != row.get("prompt"):
+            raise ValueError(f"teacher and student must receive the same three images and prompt: {sample_id}")
         if opd_enabled:
             if dataset_stage != "opd":
                 raise ValueError(f"only OPD subpool rows may enable distillation: {sample_id}")
-            teacher_images = _structured_image_paths(row.get("teacher_prompt"))
-            if teacher_images != student_images or row.get("teacher_prompt") != row.get("prompt"):
-                raise ValueError(f"teacher and student must receive the same three images and prompt: {sample_id}")
         elif dataset_stage != "grpo":
             raise ValueError(f"OPD subpool row must enable distillation: {sample_id}")
 
@@ -390,13 +404,51 @@ def validate_stage_config(config_path: str | Path, stage: str) -> dict:
             assert_pipeline_stage_isolation(dataset.parent)
     return config
 
+def assert_qwen35_stack(model_type: str, *, require_rollout: bool) -> None:
+
+    if model_type not in QWEN35_MODEL_TYPES:
+        return
+    minimum_versions = {
+        "transformers": "5.16.0",
+        "verl": "0.8.0",
+    }
+    if require_rollout:
+        minimum_versions["vllm"] = "0.20.2"
+    for package, minimum in minimum_versions.items():
+        actual = package_version(package)
+        if Version(actual) < Version(minimum):
+            raise RuntimeError(
+                f"Qwen3.5 {'GRPO' if require_rollout else 'SFT'} requires "
+                f"{package}>={minimum}, got {package}=={actual}; run bash scripts/setup.sh"
+            )
+
+
+def assert_training_model_environment(config: dict, *, require_rollout: bool) -> str:
+    from transformers import AutoConfig
+
+    model_path = str(config["model_name_or_path"])
+    hf_config = AutoConfig.from_pretrained(
+        model_path,
+        local_files_only=Path(model_path).exists(),
+    )
+    model_type = str(hf_config.model_type)
+    assert_qwen35_stack(model_type, require_rollout=require_rollout)
+    if config.get("require_gated_deltanet_kernels", True):
+        require_fast_gated_deltanet_kernels(model_type)
+    return model_type
+
+
 
 def _hydra_value(value: object) -> str:
     if value is None:
         return "null"
     if isinstance(value, bool):
         return "True" if value else "False"
-    if isinstance(value, (list, dict)):
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            f"{key}:{_hydra_value(item)}" for key, item in value.items()
+        ) + "}"
+    if isinstance(value, list):
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return str(value)
 
@@ -412,6 +464,7 @@ def build_verl_sft_command(config: dict, executable: str = "python") -> list[str
         "data.val_max_samples": config.get("validation_max_samples", -1),
         "data.enable_thinking_key": config.get("enable_thinking_key", "__disabled_enable_thinking__"),
         "data.enable_thinking_default": config.get("enable_thinking_default"),
+        "+data.apply_chat_template_kwargs": config.get("apply_chat_template_kwargs", {"enable_thinking": False}),
         "data.micro_batch_size_per_gpu": config["per_device_train_batch_size"],
         "data.max_length": config["max_sequence_length"],
         "data.max_token_len_per_gpu": config["max_token_len_per_gpu"],
@@ -421,7 +474,7 @@ def build_verl_sft_command(config: dict, executable: str = "python") -> list[str
         "data.truncation": "error",
         "data.use_dynamic_bsz": True,
         "model.path": config["model_name_or_path"],
-        "+model.override_config.attn_implementation": config.get("override_config", {}).get("attn_implementation", "flash_attention_2"),
+        "+model.override_config.attn_implementation": config.get("override_config", {}).get("attn_implementation", "sdpa"),
         "+model.override_config.min_pixels": config.get("override_config", {}).get("min_pixels", config.get("min_pixels", 784)),
         "+model.override_config.max_pixels": config.get("override_config", {}).get("max_pixels", config.get("max_pixels", 50176)),
         "model.enable_gradient_checkpointing": config["gradient_checkpointing"],
@@ -476,11 +529,16 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "data.max_response_length": config["max_response_length"],
         "data.filter_overlong_prompts": True,
         "data.truncation": "error",
+        "+data.apply_chat_template_kwargs": config.get("apply_chat_template_kwargs", {"enable_thinking": False}),
+        "+data.mm_processor_kwargs": config.get("mm_processor_kwargs", {"min_pixels": config.get("min_pixels", 784), "max_pixels": config.get("max_pixels", 65536)}),
+        "+actor_rollout_ref.model.override_config.min_pixels": config.get("min_pixels", 784),
+        "+actor_rollout_ref.model.override_config.max_pixels": config.get("max_pixels", 65536),
+        "+actor_rollout_ref.model.override_config.attn_implementation": config.get("override_config", {}).get("attn_implementation", "sdpa"),
         "actor_rollout_ref.model.path": config["model_name_or_path"],
         "actor_rollout_ref.model.lora_rank": config["lora_r"],
         "actor_rollout_ref.model.lora_alpha": config["lora_alpha"],
         "actor_rollout_ref.model.target_modules": config["lora_target_modules"],
-        "actor_rollout_ref.model.use_remove_padding": True,
+        "actor_rollout_ref.model.use_remove_padding": config.get("actor_use_remove_padding", True),
         "actor_rollout_ref.model.enable_gradient_checkpointing": True,
         "actor_rollout_ref.actor.strategy": config["actor_strategy"],
         "actor_rollout_ref.actor.optim.lr": config["learning_rate"],
@@ -505,7 +563,7 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "actor_rollout_ref.ref.fsdp_config.param_offload": config["ref_param_offload"],
         "reward.custom_reward_function.path": config["reward_function_path"],
         "reward.custom_reward_function.name": config["reward_function_name"],
-        "reward.custom_reward_function.reward_kwargs.reward_config_path": config.get(
+        "+reward.custom_reward_function.reward_kwargs.reward_config_path": config.get(
             "reward_config_path", "configs/joint.yaml"
         ),
         "trainer.logger": config.get("loggers", ["console"]),
@@ -521,6 +579,15 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "trainer.test_freq": config["test_freq"],
         "trainer.total_epochs": config["total_epochs"],
     }
+    for config_key, override_key in (
+        ("rollout_enforce_eager", "actor_rollout_ref.rollout.enforce_eager"),
+        ("rollout_max_model_len", "actor_rollout_ref.rollout.max_model_len"),
+        ("rollout_max_num_seqs", "actor_rollout_ref.rollout.max_num_seqs"),
+        ("rollout_max_num_batched_tokens", "actor_rollout_ref.rollout.max_num_batched_tokens"),
+        ("rollout_agent_num_workers", "actor_rollout_ref.rollout.agent.num_workers"),
+    ):
+        if config_key in config:
+            overrides[override_key] = config[config_key]
     if config.get("stage") == "joint":
         opd = config["opd"]
         overrides.update(
@@ -567,11 +634,13 @@ def _tracking_environment(config: dict) -> dict[str, str]:
     return env
 
 
-def launch_verl(config: dict) -> None:
+def launch_verl(config: dict) -> Path | None:
     if platform.system() != "Linux":
         raise RuntimeError("veRL GPU training must be launched from a supported Linux CUDA environment")
     if importlib.util.find_spec("verl") is None:
         raise RuntimeError("veRL is not installed; prepare-only does not install or download it")
+    model_type = assert_training_model_environment(config, require_rollout=True)
+    print(f"training model preflight: model_type={model_type}, rollout=vllm")
     adapter_value = config.get("lora_adapter_path")
     if adapter_value and not Path(adapter_value).exists():
         raise FileNotFoundError(f"SFT LoRA adapter does not exist: {adapter_value}")
@@ -583,6 +652,9 @@ def launch_verl(config: dict) -> None:
         if not teacher.exists():
             raise FileNotFoundError(f"frozen SFT teacher checkpoint does not exist: {teacher}")
     subprocess.run(build_verl_command(config, sys.executable), check=True, env=_tracking_environment(config))
+    if config.get("stage") == "joint":
+        return export_joint_hf_checkpoint(config)
+    return None
 
 
 def record_latest_sft_checkpoint(output_dir: str | Path) -> Path:
@@ -617,6 +689,8 @@ def launch_verl_sft(config: dict) -> Path:
         raise RuntimeError("veRL GPU training must be launched from a supported Linux CUDA environment")
     if importlib.util.find_spec("verl") is None:
         raise RuntimeError("veRL is not installed; run scripts/setup.sh first")
+    model_type = assert_training_model_environment(config, require_rollout=False)
+    print(f"training model preflight: model_type={model_type}, gated_deltanet=fast")
     from src.data.export_verl_sft import write_parquet_if_needed
 
     parquet_pairs = [
@@ -638,9 +712,11 @@ def launch_verl_sft(config: dict) -> Path:
             continue
         write_parquet_if_needed(source, target)
         seen_pairs.add(pair)
+    from src.training.sft_checkpoint_policy import ensure_sft_latest_only_checkpoint_hook
     from src.training.sft_progress import ensure_sft_progress_hook
 
     ensure_sft_progress_hook()
+    ensure_sft_latest_only_checkpoint_hook()
     subprocess.run(build_verl_sft_command(config, sys.executable), check=True, env=_tracking_environment(config))
     return record_latest_sft_checkpoint(config["output_dir"])
 
@@ -663,3 +739,65 @@ def write_run_manifest(config_path: str | Path, config: dict) -> Path:
     target = output_dir / "run_manifest.json"
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
+
+def _checkpoint_step(path: Path) -> int:
+    try:
+        return int(path.name.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def _latest_joint_actor_checkpoint(output_dir: str | Path) -> Path:
+    root = Path(output_dir).resolve()
+    candidates = [path for path in root.glob("global_step_*/actor") if path.is_dir()]
+    if not candidates:
+        raise FileNotFoundError(f"veRL Joint produced no actor checkpoint under {root}")
+    return max(candidates, key=lambda path: _checkpoint_step(path.parent))
+
+
+def export_joint_hf_checkpoint(config: dict) -> Path:
+    """Merge the newest FSDP actor once and update a loadable ``latest`` alias."""
+
+    output_dir = Path(config["output_dir"]).resolve()
+    actor = _latest_joint_actor_checkpoint(output_dir)
+    if not (actor / "huggingface").is_dir():
+        raise FileNotFoundError(f"Joint actor checkpoint has no Hugging Face metadata: {actor}")
+    export_root = Path(config.get("hf_export_root", output_dir / "hf_exports"))
+    if not export_root.is_absolute():
+        export_root = (Path.cwd() / export_root).resolve()
+    export_root.mkdir(parents=True, exist_ok=True)
+    target = export_root / actor.parent.name
+    if target.exists():
+        if not target.is_dir() or not (target / "config.json").is_file():
+            raise FileExistsError(f"refusing to reuse incomplete Joint HF export: {target}")
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "verl.model_merger",
+            "merge",
+            "--backend",
+            str(config.get("hf_merge_backend", "fsdp")),
+            "--local_dir",
+            str(actor),
+            "--target_dir",
+            str(target),
+        ]
+        subprocess.run(command, check=True, env=_tracking_environment(config))
+    weights = [
+        path
+        for path in target.iterdir()
+        if path.is_file() and path.suffix.lower() in {".safetensors", ".bin", ".pt"}
+    ]
+    if not (target / "config.json").is_file() or not weights:
+        raise FileNotFoundError(f"Joint HF export is incomplete: {target}")
+    alias = Path(config.get("latest_alias", output_dir / "latest"))
+    if not alias.is_absolute():
+        alias = (Path.cwd() / alias).resolve()
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    if alias.is_symlink():
+        alias.unlink()
+    elif alias.exists():
+        raise FileExistsError(f"refusing to replace non-symlink Joint alias: {alias}")
+    alias.symlink_to(Path(os.path.relpath(target, alias.parent)), target_is_directory=True)
+    return alias

@@ -7,6 +7,7 @@ from PIL import Image
 
 from src.common import load_yaml, read_jsonl, write_jsonl
 from src.models.audit_protocol import PROMPT, assert_model_text_is_sanitized, product_prompt, structured_prompt
+from src.models.hf_loader import load_multimodal_components
 
 
 def _load_samples(config: dict) -> list[dict]:
@@ -36,22 +37,30 @@ def _load_samples(config: dict) -> list[dict]:
 def predict(config: dict, model_name_or_path: str, output_path: str | Path) -> Path:
     try:
         import torch
-        from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
     except ImportError as exc:
-        raise RuntimeError("torch and transformers with Qwen3-VL support are required for prediction") from exc
+        raise RuntimeError("torch is required for multimodal prediction") from exc
 
     processor_kwargs = {}
     if config.get("min_pixels") is not None:
         processor_kwargs["min_pixels"] = int(config["min_pixels"])
     if config.get("max_pixels") is not None:
         processor_kwargs["max_pixels"] = int(config["max_pixels"])
-    processor = AutoProcessor.from_pretrained(model_name_or_path, **processor_kwargs)
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
+    components = load_multimodal_components(
         model_name_or_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        dtype=torch.bfloat16,
+        processor_kwargs=processor_kwargs,
+        require_fast_kernels=bool(config.get("require_gated_deltanet_kernels", True)),
+        use_hub_kernels=bool(config.get("use_hub_kernels", False)),
     )
+    processor = components.processor
+    model = components.model
     model.eval()
+    print(
+        f"loaded {components.model_type}: processor={components.processor_load_seconds:.3f}s "
+        f"model={components.model_load_seconds:.3f}s "
+        f"gated_deltanet={components.gated_deltanet_backend}",
+        flush=True,
+    )
 
     predictions = []
     for sample in _load_samples(config):
@@ -65,7 +74,12 @@ def predict(config: dict, model_name_or_path: str, output_path: str | Path) -> P
         )
         messages = structured_prompt(image_paths, text)
         assert_model_text_is_sanitized(messages)
-        rendered_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        rendered_prompt = processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            **config.get("apply_chat_template_kwargs", {"enable_thinking": False}),
+        )
         if PROMPT not in rendered_prompt or any(path in rendered_prompt for path in image_paths):
             raise ValueError("processor exposed an image path or dropped the canonical audit prompt")
         with Image.open(image_paths[0]) as main, Image.open(image_paths[1]) as detail1, Image.open(image_paths[2]) as detail2:
