@@ -28,7 +28,7 @@ def compute_score(
     solution_str: str,
     ground_truth: str | dict[str, Any],
     extra_info: dict[str, Any] | None = None,
-    reward_config_path: str = "configs/joint.yaml",
+    reward_config_path: str = "configs/grpo.yaml",
 ) -> dict[str, float]:
     """Adapt the project's rule reward to veRL's custom reward API."""
     if data_source != "vlm_product_audit":

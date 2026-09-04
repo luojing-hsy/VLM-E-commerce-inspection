@@ -150,3 +150,134 @@ def ensure_grpo_latest_only_checkpoint_hook() -> Path:
         shutil.copy2(ray_trainer_path, backup)
     ray_trainer_path.write_text(updated, encoding="utf-8")
     return ray_trainer_path
+
+def ensure_grpo_final_checkpoint_hook() -> Path:
+    """Install a final-save fallback for natural loop exhaustion."""
+    path = _ray_trainer_path()
+    original = path.read_text(encoding="utf-8")
+    marker = "VLM_PRODUCT_AUDIT_GRPO_FINAL_CHECKPOINT_V1"
+    if marker in original:
+        return path
+
+    anchor = (
+        "        # Ensure dump executor is shut down when training loop ends without reaching is_last_step\n"
+        "        self._shutdown_dump_executor()\n"
+    )
+    replacement = (
+        "        # Ensure dump executor is shut down when training loop ends without reaching is_last_step\n"
+        "        self._shutdown_dump_executor()\n"
+        f"        # {marker}: save the actual final processed step.\n"
+        "        final_step = self.global_steps - 1\n"
+        "        if final_step > 0 and (\n"
+        "            self.config.trainer.save_freq <= 0\n"
+        "            or final_step % self.config.trainer.save_freq != 0\n"
+        "        ):\n"
+        "            previous_global_step = self.global_steps\n"
+        "            self.global_steps = final_step\n"
+        "            try:\n"
+        "                self._save_checkpoint()\n"
+        "            finally:\n"
+        "                self.global_steps = previous_global_step\n"
+    )
+    if original.count(anchor) != 1:
+        raise RuntimeError("veRL ray_trainer.py final-save anchor was not unique")
+    updated = original.replace(anchor, replacement)
+    compile(updated, str(path), "exec")
+    backup = Path(str(path) + _BACKUP_SUFFIX)
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    path.write_text(updated, encoding="utf-8")
+    return path
+
+def ensure_grpo_filter_reward_mean_hook() -> Path:
+    """Install dynamic-filter reward mean logging in veRL."""
+    path = _ray_trainer_path()
+    original = path.read_text(encoding="utf-8")
+    marker = "VLM_PRODUCT_AUDIT_GRPO_FILTER_REWARD_MEAN_V1"
+    if marker in original:
+        return path
+
+    stats_anchor = (
+        '        filter_pending_stats = {"generated": 0, "kept": 0, "filtered": 0, "fallback": 0}\n'
+    )
+    stats_replacement = (
+        f"        # {marker}\n"
+        '        filter_pending_stats = {"generated": 0, "kept": 0, "filtered": 0, "fallback": 0, '
+        '"filtered_reward_sum": 0.0, "filtered_reward_count": 0}\n'
+    )
+    if original.count(stats_anchor) != 2:
+        raise RuntimeError("veRL ray_trainer.py filter stats anchor was not unique twice")
+    updated = original.replace(stats_anchor, stats_replacement)
+
+    reward_anchor = (
+        "                        prompt_uid2metric_vals = defaultdict(list)\n"
+        "                        for uid, metric_value in zip(\n"
+        "                            new_batch.non_tensor_batch[\"uid\"], metric_values, strict=True\n"
+        "                        ):\n"
+        "                            prompt_uid2metric_vals[str(uid)].append(float(metric_value))\n"
+    )
+    reward_replacement = (
+        "                        reward_values = (\n"
+        "                            new_batch.batch[\"token_level_scores\"]\n"
+        "                            .sum(dim=-1)\n"
+        "                            .detach()\n"
+        "                            .cpu()\n"
+        "                            .numpy()\n"
+        "                        )\n"
+        "                        prompt_uid2metric_vals = defaultdict(list)\n"
+        "                        prompt_uid2reward_vals = defaultdict(list)\n"
+        "                        for uid, metric_value, reward_value in zip(\n"
+        "                            new_batch.non_tensor_batch[\"uid\"], metric_values, reward_values, strict=True\n"
+        "                        ):\n"
+        "                            prompt_uid2metric_vals[str(uid)].append(float(metric_value))\n"
+        "                            prompt_uid2reward_vals[str(uid)].append(float(reward_value))\n"
+    )
+    if updated.count(reward_anchor) != 1:
+        raise RuntimeError("veRL ray_trainer.py reward grouping anchor was not unique")
+    updated = updated.replace(reward_anchor, reward_replacement)
+
+    filter_anchor = (
+        "                        kept_prompt_uids = []\n"
+        "                        for uid, values in prompt_uid2metric_vals.items():\n"
+        "                            std = float(np.std(values))\n"
+        "                            if std > filter_groups_zero_variance_eps or len(values) == 1:\n"
+        "                                kept_prompt_uids.append(uid)\n"
+    )
+    filter_replacement = (
+        "                        kept_prompt_uids = []\n"
+        "                        for uid, values in prompt_uid2metric_vals.items():\n"
+        "                            std = float(np.std(values))\n"
+        "                            if std > filter_groups_zero_variance_eps or len(values) == 1:\n"
+        "                                kept_prompt_uids.append(uid)\n"
+        "                            else:\n"
+        "                                filter_pending_stats[\"filtered_reward_sum\"] += float(np.mean(prompt_uid2reward_vals[uid]))\n"
+        "                                filter_pending_stats[\"filtered_reward_count\"] += 1\n"
+    )
+    if updated.count(filter_anchor) != 1:
+        raise RuntimeError("veRL ray_trainer.py filter classification anchor was not unique")
+    updated = updated.replace(filter_anchor, filter_replacement)
+
+    metric_anchor = (
+        "                            \"grpo/filter_zero_variance_ratio\": (\n"
+        "                                filter_pending_stats[\"filtered\"] / generated_groups\n"
+        "                                if generated_groups\n"
+        "                                else 0.0\n"
+        "                            ),\n"
+    )
+    metric_replacement = metric_anchor + (
+        "                            \"grpo/filter_zero_variance_group_reward_mean\": (\n"
+        "                                filter_pending_stats[\"filtered_reward_sum\"] / filter_pending_stats[\"filtered_reward_count\"]\n"
+        "                                if filter_pending_stats[\"filtered_reward_count\"]\n"
+        "                                else 0.0\n"
+        "                            ),\n"
+    )
+    if updated.count(metric_anchor) != 1:
+        raise RuntimeError("veRL ray_trainer.py filter metrics anchor was not unique")
+    updated = updated.replace(metric_anchor, metric_replacement)
+
+    compile(updated, str(path), "exec")
+    backup = Path(str(path) + _BACKUP_SUFFIX)
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    path.write_text(updated, encoding="utf-8")
+    return path

@@ -1,0 +1,47 @@
+--- a/verl/experimental/agent_loop/agent_loop.py
++++ b/verl/experimental/agent_loop/agent_loop.py
+@@ -610,7 +610,7 @@
+         """Right/left pad a flat list of token ids to a ``(1, max_length)`` tensor."""
+         self.tokenizer.padding_side = padding_side
+         padded = self.tokenizer.pad(
+-            {"input_ids": tokens},
++            {"input_ids": [tokens]},
+             padding="max_length",
+             max_length=max_length,
+             return_tensors="pt",
+--- a/verl/workers/rollout/vllm_rollout/vllm_async_server.py
++++ b/verl/workers/rollout/vllm_rollout/vllm_async_server.py
+@@ -945,6 +945,8 @@
+         else:
+             sleep_level = 2
+         await self.engine.sleep(level=sleep_level)
++        # Sleep clears the receiver cache; also reset the sender before the next rollout.
++        await self.engine.reset_mm_cache()
+         if _VLLM_VERSION >= version.parse("0.17.0"):
+             await self.engine.reset_encoder_cache()
+ 
+--- a/verl/experimental/agent_loop/single_turn_agent_loop.py
++++ b/verl/experimental/agent_loop/single_turn_agent_loop.py
+@@ -77,15 +77,21 @@
+ 
+         # 3. generate sequences
+         metrics = {}
++        request_id = uuid4().hex
+         with simple_timer("generate_sequences", metrics):
+             output: TokenOutput = await self.server_manager.generate(
+-                request_id=uuid4().hex,
++                request_id=request_id,
+                 prompt_ids=prompt_ids,
+                 sampling_params=sampling_params,
+                 image_data=images,
+                 video_data=videos,
+                 audio_data=audios,
+                 mm_processor_kwargs=mm_processor_kwargs,
++            )
++        if output.stop_reason in ("error", "aborted"):
++            raise RuntimeError(
++                f"Rollout failed: request_id={request_id}, stop_reason={output.stop_reason}, "
++                f"response_tokens={len(output.token_ids)}; check the vLLM logs for the upstream error."
+             )
+         if metrics.get("num_preempted") is None:
+             metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1

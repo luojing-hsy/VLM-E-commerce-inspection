@@ -8,7 +8,11 @@ from pathlib import Path
 
 from src.common import load_yaml
 from src.data.prepare_dataset import prepare_stage
-from src.training.grpo_checkpoint_policy import ensure_grpo_latest_only_checkpoint_hook
+from src.training.grpo_checkpoint_policy import (
+    ensure_grpo_final_checkpoint_hook,
+    ensure_grpo_filter_reward_mean_hook,
+    ensure_grpo_latest_only_checkpoint_hook,
+)
 from src.training.runtime import (
     apply_resume_options,
     build_verl_command,
@@ -56,6 +60,10 @@ def main() -> None:
     if args.print_command:
         print(shlex.join(build_verl_command(config, sys.executable)))
         return
+    final_hook_path = ensure_grpo_final_checkpoint_hook()
+    print(f"GRPO final-checkpoint hook: {final_hook_path}")
+    filter_reward_hook_path = ensure_grpo_filter_reward_mean_hook()
+    print(f"GRPO filter-reward hook: {filter_reward_hook_path}")
 
     hook_path = ensure_grpo_latest_only_checkpoint_hook()
     print(f"GRPO latest-only checkpoint hook: {hook_path}")

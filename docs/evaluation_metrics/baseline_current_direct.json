@@ -1,0 +1,50 @@
+{
+  "num_evaluated": 200,
+  "detection_success_rate": 0.64,
+  "violation_detection_success_rate": 0.6,
+  "type_inspection_success_probability": 0.54,
+  "complete_inspection_success_probability": 0.54,
+  "decision_accuracy": 0.64,
+  "violation_macro_f1": 0.4987051577979614,
+  "severe_violation_miss_rate": 0.4,
+  "false_reject_rate": 0.08,
+  "business_risk": 0.20320000000000005,
+  "decision_confusion": {
+    "pass": {
+      "pass": 23,
+      "reject": 2
+    },
+    "reject": {
+      "pass": 70,
+      "reject": 105
+    }
+  },
+  "quality_subtype_accuracy": 0.1,
+  "image_ref_accuracy": 0.48,
+  "evidence_mean_score": 0.48,
+  "evidence_recall_at_0_5": 0.48,
+  "num_counterfactual_pairs": 0,
+  "counterfactual_pair_accuracy": null,
+  "counterfactual_flip_consistency": null,
+  "parse_rate": 1.0,
+  "slices": {
+    "by_split": {
+      "test": 200
+    },
+    "by_violation_type": {
+      "category_mismatch": 25,
+      "image_quality": 20,
+      "wrong_image": 30,
+      "title_mismatch": 30,
+      "pass": 25,
+      "color_mismatch": 25,
+      "material_mismatch": 25,
+      "duplicate_detail_image": 20
+    },
+    "by_template": {
+      "direct_test200": 200
+    },
+    "with_small_local_evidence": 0
+  },
+  "mode": "model_predictions"
+}

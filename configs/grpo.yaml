@@ -23,17 +23,25 @@ precision: bf16
 quantization: none
 learning_rate: 2.0e-6
 rollout_n: 4
-train_batch_size: 1
+train_batch_size: 4
 ppo_mini_batch_size: 4
+filter_groups:
+  enable: true
+  metric: seq_final_reward
+  max_num_gen_batches: 8
 ppo_epochs: 1
 max_prompt_length: 1792
 max_response_length: 256
+filter_overlong_prompts_workers: 8
 temperature: 0.8
 top_p: 0.95
 actor_strategy: fsdp2
 rollout_backend: vllm
 rollout_tensor_model_parallel_size: 1
-rollout_gpu_memory_utilization: 0.35
+rollout_gpu_memory_utilization: 0.50
+rollout_max_model_len: 4096
+rollout_max_num_seqs: 16
+rollout_max_num_batched_tokens: 4096
 actor_use_remove_padding: false
 actor_param_offload: true
 actor_optimizer_offload: true
@@ -44,16 +52,16 @@ beta: 0.02
 lora_r: 16
 lora_alpha: 32
 lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
-n_gpus_per_node: 1
+n_gpus_per_node: 2
 nnodes: 1
 total_epochs: 1
-save_freq: 200
-test_freq: 200
+save_freq: 20
+test_freq: 20
 max_actor_ckpt_to_keep: 1
 resume_mode: auto
 resume_from_path: null
 loggers: [console, file]
-log_file: outputs/grpo/training_metrics.jsonl
+log_file: outputs/grpo/training_metrics_b4_m4_r4.jsonl
 project_name: vlm_product_audit
 experiment_name: qwen3_5_4b_grpo
 reward_function_path: src/rewards/verl_reward.py

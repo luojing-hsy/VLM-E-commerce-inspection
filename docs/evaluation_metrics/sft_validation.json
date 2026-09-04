@@ -1,0 +1,87 @@
+{
+  "num_evaluated": 100,
+  "detection_success_rate": 0.91,
+  "violation_detection_success_rate": 0.9411764705882353,
+  "type_inspection_success_probability": 0.86,
+  "complete_inspection_success_probability": 0.85,
+  "decision_accuracy": 0.91,
+  "violation_macro_f1": 0.8370501045400239,
+  "severe_violation_miss_rate": 0.058823529411764705,
+  "false_reject_rate": 0.26666666666666666,
+  "business_risk": 0.14352941176470588,
+  "decision_confusion": {
+    "pass": {
+      "pass": 11,
+      "reject": 4
+    },
+    "reject": {
+      "reject": 80,
+      "pass": 5
+    }
+  },
+  "quality_subtype_accuracy": 0.4,
+  "image_ref_accuracy": 0.9,
+  "evidence_mean_score": 0.9,
+  "evidence_recall_at_0_5": 0.9,
+  "parse_rate": 1.0,
+  "exact_protocol_accuracy": 0.85,
+  "per_class_exact_accuracy": {
+    "category_mismatch": {
+      "count": 15,
+      "correct": 11,
+      "accuracy": 0.7333333333333333
+    },
+    "color_mismatch": {
+      "count": 15,
+      "correct": 13,
+      "accuracy": 0.8666666666666667
+    },
+    "duplicate_detail_image": {
+      "count": 5,
+      "correct": 4,
+      "accuracy": 0.8
+    },
+    "image_quality": {
+      "count": 5,
+      "correct": 2,
+      "accuracy": 0.4
+    },
+    "material_mismatch": {
+      "count": 15,
+      "correct": 14,
+      "accuracy": 0.9333333333333333
+    },
+    "pass": {
+      "count": 15,
+      "correct": 11,
+      "accuracy": 0.7333333333333333
+    },
+    "title_mismatch": {
+      "count": 15,
+      "correct": 15,
+      "accuracy": 1.0
+    },
+    "wrong_image": {
+      "count": 15,
+      "correct": 15,
+      "accuracy": 1.0
+    }
+  },
+  "label_counts": {
+    "category_mismatch": 15,
+    "color_mismatch": 15,
+    "duplicate_detail_image": 5,
+    "image_quality": 5,
+    "material_mismatch": 15,
+    "pass": 15,
+    "title_mismatch": 15,
+    "wrong_image": 15
+  },
+  "mode": "sft_validation",
+  "dataset": "data/sft/valid.jsonl",
+  "model": "/root/autodl-tmp/vlm-qwen3vl/outputs/sft_qwen35_4b/latest/huggingface",
+  "split": "validation",
+  "inference_seconds": 641.938,
+  "seconds_per_sample": 6.419,
+  "peak_allocated_gib": 10.679
+}

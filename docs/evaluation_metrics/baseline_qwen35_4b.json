@@ -1,0 +1,86 @@
+{
+  "num_evaluated": 200,
+  "detection_success_rate": 0.45,
+  "violation_detection_success_rate": 0.5142857142857142,
+  "type_inspection_success_probability": 0.4,
+  "complete_inspection_success_probability": 0.395,
+  "decision_accuracy": 0.45,
+  "violation_macro_f1": 0.4066955871366412,
+  "severe_violation_miss_rate": 0.0,
+  "false_reject_rate": 0.0,
+  "business_risk": 0.7942857142857143,
+  "decision_confusion": {
+    "pass": {
+      "INVALID": 25
+    },
+    "reject": {
+      "INVALID": 85,
+      "reject": 90
+    }
+  },
+  "quality_subtype_accuracy": 0.2,
+  "image_ref_accuracy": 0.36,
+  "evidence_mean_score": 0.36,
+  "evidence_recall_at_0_5": 0.36,
+  "parse_rate": 0.45,
+  "exact_protocol_accuracy": 0.395,
+  "per_class_exact_accuracy": {
+    "category_mismatch": {
+      "count": 25,
+      "correct": 10,
+      "accuracy": 0.4
+    },
+    "color_mismatch": {
+      "count": 25,
+      "correct": 9,
+      "accuracy": 0.36
+    },
+    "duplicate_detail_image": {
+      "count": 20,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "image_quality": {
+      "count": 20,
+      "correct": 4,
+      "accuracy": 0.2
+    },
+    "material_mismatch": {
+      "count": 25,
+      "correct": 16,
+      "accuracy": 0.64
+    },
+    "pass": {
+      "count": 25,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "title_mismatch": {
+      "count": 30,
+      "correct": 26,
+      "accuracy": 0.8666666666666667
+    },
+    "wrong_image": {
+      "count": 30,
+      "correct": 14,
+      "accuracy": 0.4666666666666667
+    }
+  },
+  "label_counts": {
+    "category_mismatch": 25,
+    "color_mismatch": 25,
+    "duplicate_detail_image": 20,
+    "image_quality": 20,
+    "material_mismatch": 25,
+    "pass": 25,
+    "title_mismatch": 30,
+    "wrong_image": 30
+  },
+  "mode": "qwen3_5_4b_baseline",
+  "dataset": "data/test/test.jsonl",
+  "model": "/root/autodl-tmp/models/Qwen3.5-4B",
+  "split": "test",
+  "inference_seconds": 1065.67,
+  "seconds_per_sample": 5.328,
+  "peak_allocated_gib": 8.733
+}

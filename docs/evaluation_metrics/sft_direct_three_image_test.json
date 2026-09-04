@@ -1,0 +1,91 @@
+{
+  "num_evaluated": 200,
+  "detection_success_rate": 0.8,
+  "violation_detection_success_rate": 0.7942857142857143,
+  "type_inspection_success_probability": 0.75,
+  "complete_inspection_success_probability": 0.73,
+  "decision_accuracy": 0.8,
+  "violation_macro_f1": 0.7477867157904087,
+  "severe_violation_miss_rate": 0.2057142857142857,
+  "false_reject_rate": 0.16,
+  "business_risk": 0.1542857142857143,
+  "decision_confusion": {
+    "pass": {
+      "pass": 21,
+      "reject": 4
+    },
+    "reject": {
+      "pass": 36,
+      "reject": 139
+    }
+  },
+  "quality_subtype_accuracy": 0.55,
+  "image_ref_accuracy": 0.72,
+  "evidence_mean_score": 0.72,
+  "evidence_recall_at_0_5": 0.72,
+  "parse_rate": 1.0,
+  "exact_protocol_accuracy": 0.73,
+  "per_class_exact_accuracy": {
+    "category_mismatch": {
+      "count": 25,
+      "correct": 15,
+      "accuracy": 0.6
+    },
+    "color_mismatch": {
+      "count": 25,
+      "correct": 19,
+      "accuracy": 0.76
+    },
+    "duplicate_detail_image": {
+      "count": 20,
+      "correct": 6,
+      "accuracy": 0.3
+    },
+    "image_quality": {
+      "count": 20,
+      "correct": 11,
+      "accuracy": 0.55
+    },
+    "material_mismatch": {
+      "count": 25,
+      "correct": 22,
+      "accuracy": 0.88
+    },
+    "pass": {
+      "count": 25,
+      "correct": 21,
+      "accuracy": 0.84
+    },
+    "title_mismatch": {
+      "count": 30,
+      "correct": 30,
+      "accuracy": 1.0
+    },
+    "wrong_image": {
+      "count": 30,
+      "correct": 22,
+      "accuracy": 0.7333333333333333
+    }
+  },
+  "label_counts": {
+    "category_mismatch": 25,
+    "color_mismatch": 25,
+    "duplicate_detail_image": 20,
+    "image_quality": 20,
+    "material_mismatch": 25,
+    "pass": 25,
+    "title_mismatch": 30,
+    "wrong_image": 30
+  },
+  "mode": "sft_model_test_direct_three_images",
+  "dataset": "data/test/test.jsonl",
+  "model": "outputs/sft_qwen35_4b/latest/huggingface (base + LoRA merged in memory)",
+  "split": "test",
+  "inference_seconds": 281.722,
+  "seconds_per_sample": 7.043,
+  "peak_allocated_gib": 9.52,
+  "processor_load_seconds": 1.7,
+  "model_load_seconds": 5.043,
+  "model_type": "qwen3_5",
+  "gated_deltanet_backend": "fla+causal_conv1d"
+}
