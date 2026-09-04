@@ -13,13 +13,13 @@ def test_active_configs_use_current_dataset_directories() -> None:
     assert sft["dataset"].startswith("outputs/sft/")
     assert sft["validation_dataset"].startswith("outputs/sft/")
 
-    joint = load_yaml(PROJECT_ROOT / "configs" / "joint.yaml")
-    assert joint["source_dataset"] == "data/joint/train.jsonl"
-    assert joint["validation_source_dataset"] == "data/joint/valid.jsonl"
-    assert joint["dataset"].startswith("outputs/joint/")
-    assert joint["validation_dataset"].startswith("outputs/joint/")
+    grpo = load_yaml(PROJECT_ROOT / "configs" / "grpo.yaml")
+    assert grpo["source_dataset"] == "data/GRPO/train.jsonl"
+    assert grpo["validation_source_dataset"] == "data/GRPO/valid.jsonl"
+    assert grpo["dataset"].startswith("outputs/grpo/")
+    assert grpo["validation_dataset"].startswith("outputs/grpo/")
 
     evaluation = load_yaml(PROJECT_ROOT / "configs" / "eval.yaml")
     assert evaluation["dataset_split"] == "test"
     assert evaluation["source_dataset"] == "data/test/test.jsonl"
-    assert evaluation["manifest"].endswith("samples_test.jsonl")
+    assert evaluation["manifest"].endswith("manifest_test.jsonl")

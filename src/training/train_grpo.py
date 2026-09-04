@@ -7,12 +7,16 @@ import time
 from pathlib import Path
 
 from src.common import load_yaml
-from src.data.export_grpo_from_joint import write_exports
-from src.training.grpo_checkpoint_policy import ensure_grpo_latest_only_checkpoint_hook
+from src.data.prepare_dataset import prepare_stage
+from src.training.grpo_checkpoint_policy import (
+    ensure_grpo_final_checkpoint_hook,
+    ensure_grpo_filter_reward_mean_hook,
+    ensure_grpo_latest_only_checkpoint_hook,
+)
 from src.training.runtime import (
     apply_resume_options,
     build_verl_command,
-    export_joint_hf_checkpoint,
+    export_grpo_hf_checkpoint,
     launch_verl,
     validate_stage_config,
     write_run_manifest,
@@ -20,8 +24,8 @@ from src.training.runtime import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Launch GRPO on the joint runtime dataset with veRL")
-    parser.add_argument("--config", default="configs/grpo_on_joint.yaml")
+    parser = argparse.ArgumentParser(description="Launch pure GRPO with veRL")
+    parser.add_argument("--config", default="configs/grpo.yaml")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-only", action="store_true")
     mode.add_argument("--print-command", action="store_true")
@@ -31,8 +35,8 @@ def main() -> None:
     args = parser.parse_args()
 
     source_config = load_yaml(args.config)
-    targets = write_exports(source_config)
-    print(f"GRPO-on-joint data prepared: {', '.join(str(path) for path in targets.values())}")
+    targets = prepare_stage(args.config, "grpo", source_config.get("prepare_max_samples"))
+    print(f"GRPO data prepared: {', '.join(str(path) for path in targets)}")
 
     config = validate_stage_config(args.config, "grpo")
     model_path = Path(config["model_name_or_path"]).resolve()
@@ -49,13 +53,17 @@ def main() -> None:
         raise FileNotFoundError(f"GRPO student checkpoint does not exist: {model_path}")
     apply_resume_options(config, args.resume_from, args.restart)
     manifest = write_run_manifest(args.config, config)
-    print(f"veRL GRPO-on-joint inputs validated; metadata: {manifest}")
+    print(f"veRL GRPO inputs validated; metadata: {manifest}")
 
     if args.prepare_only:
         return
     if args.print_command:
         print(shlex.join(build_verl_command(config, sys.executable)))
         return
+    final_hook_path = ensure_grpo_final_checkpoint_hook()
+    print(f"GRPO final-checkpoint hook: {final_hook_path}")
+    filter_reward_hook_path = ensure_grpo_filter_reward_mean_hook()
+    print(f"GRPO filter-reward hook: {filter_reward_hook_path}")
 
     hook_path = ensure_grpo_latest_only_checkpoint_hook()
     print(f"GRPO latest-only checkpoint hook: {hook_path}")
@@ -69,9 +77,9 @@ def main() -> None:
             "hf_latest_alias",
             str(Path(config["output_dir"]) / "hf_latest"),
         )
-        checkpoint = export_joint_hf_checkpoint(export_config)
-        print(f"latest GRPO-on-joint Hugging Face checkpoint: {checkpoint}")
-    print(f"GRPO-on-joint training seconds: {training_seconds:.3f}")
+        checkpoint = export_grpo_hf_checkpoint(export_config)
+        print(f"latest GRPO Hugging Face checkpoint: {checkpoint}")
+    print(f"GRPO training seconds: {training_seconds:.3f}")
 
 
 if __name__ == "__main__":

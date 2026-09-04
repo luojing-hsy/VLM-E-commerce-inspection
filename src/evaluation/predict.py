@@ -11,7 +11,7 @@ from src.models.hf_loader import load_multimodal_components
 
 
 def _load_samples(config: dict) -> list[dict]:
-    paths = [Path(config["manifest"]), Path(config["counterfactual_manifest"])]
+    paths = [Path(config["manifest"])]
     rows: list[dict] = []
     seen: set[str] = set()
     for path in paths:
@@ -109,7 +109,7 @@ def predict(config: dict, model_name_or_path: str, output_path: str | Path) -> P
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Base/SFT/Joint checkpoints with the fixed audit prompt")
+    parser = argparse.ArgumentParser(description="Run Base/SFT/GRPO checkpoints with the fixed audit prompt")
     parser.add_argument("--config", default="configs/eval.yaml")
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", required=True)

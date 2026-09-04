@@ -1,4 +1,8 @@
-"""Adapt current dataset rows to rendered veRL consumer inputs without reinjection."""
+"""Prepare direct-image datasets for SFT and GRPO training plus evaluation.
+
+The runtime consumes the three source images directly.  No composite images or
+rendered page artifacts are created.
+"""
 
 from __future__ import annotations
 
@@ -9,32 +13,32 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.common import load_yaml, read_jsonl, sha256_file, write_jsonl
-from src.evaluation.evaluate_synthesis import render_page
 from src.models.audit_protocol import IMAGE_REFS, product_prompt, structured_prompt, target_from_sample
 
 
 DEFAULT_CONFIGS = {
     "sft": Path("configs/sft.yaml"),
-    "joint": Path("configs/joint.yaml"),
+    "grpo": Path("configs/grpo.yaml"),
     "eval": Path("configs/eval.yaml"),
 }
 
 
 def _image_paths(row: dict[str, Any]) -> list[str]:
     images = row.get("images")
-    if not isinstance(images, dict):
-        raise ValueError(f"missing images object: {row.get('product_id')}")
-    main = images.get("main")
-    details = images.get("detail")
-    main_path = main.get("image_id") if isinstance(main, dict) else None
-    if not isinstance(details, list) or len(details) != 2:
-        raise ValueError(f"expected exactly two detail images: {row.get('product_id')}")
-    paths = [
-        main_path,
-        *(item.get("image_id") if isinstance(item, dict) else None for item in details),
-    ]
-    if not all(isinstance(path, str) and Path(path).is_file() for path in paths):
-        raise FileNotFoundError(f"missing dataset image: {row.get('product_id')} -> {paths}")
+    if isinstance(images, list):
+        paths = images
+    elif isinstance(images, dict):
+        main = images.get("main")
+        details = images.get("detail")
+        main_path = main.get("image_id") if isinstance(main, dict) else None
+        paths = [
+            main_path,
+            *(item.get("image_id") if isinstance(item, dict) else None for item in details)
+        ] if isinstance(details, list) else []
+    else:
+        paths = []
+    if len(paths) != 3 or not all(isinstance(path, str) and Path(path).is_file() for path in paths):
+        raise FileNotFoundError(f"expected three existing dataset images: {row.get('sample_id') or row.get('product_id')} -> {paths}")
     return [str(path) for path in paths]
 
 
@@ -43,10 +47,20 @@ def _source_image_id(path: str) -> str:
     return f"sha256:{sha256_file(path)}"
 
 
+def _sample_id(row: dict[str, Any], dataset_stage: str, split: str) -> str:
+    sample_id = row.get("sample_id")
+    if isinstance(sample_id, str) and sample_id:
+        return sample_id
+    product_id = row.get("product_id")
+    if not isinstance(product_id, str) or not product_id:
+        raise ValueError("dataset row requires sample_id or product_id")
+    dataset = str(row.get("dataset") or f"{dataset_stage}_{split}")
+    return f"{dataset}_{product_id}"
+
+
 def _normalize(
     row: dict[str, Any],
     image_paths: list[str],
-    page: Path | None,
     dataset_stage: str,
     split: str,
 ) -> dict[str, Any]:
@@ -55,22 +69,20 @@ def _normalize(
     if violation_type in {"image_quality", "wrong_image"}:
         target_image_ref = row.get("target_image_ref")
         if target_image_ref not in IMAGE_REFS:
-            raise ValueError(f"{violation_type} requires target_image_ref: {row.get('product_id')}")
+            raise ValueError(f"{violation_type} requires target_image_ref: {row.get('sample_id') or row.get('product_id')}")
         evidence = target_image_ref
 
-    dataset_name = str(row.get("dataset") or f"{dataset_stage}_{split}")
-    sample_id = f"{dataset_name}_{row['product_id']}"
-    source_product_id = str(row.get("source_product_id") or row["product_id"])
+    sample_id = _sample_id(row, dataset_stage, split)
+    source_product_id = str(row.get("source_product_id") or row.get("product_id") or sample_id)
+    source_image_ids = [_source_image_id(path) for path in image_paths]
     sample = {
         "sample_id": sample_id,
         "images": image_paths,
-        "page": page.as_posix() if page else None,
         "derived_image_id": f"sample:{sample_id}",
         "source_product_ids": [source_product_id],
-        "source_image_ids": [_source_image_id(path) for path in image_paths],
+        "source_image_ids": source_image_ids,
         "dataset_stage": dataset_stage,
         "split": split,
-        "template_id": "synthesis_v2",
         "decision": "pass" if violation_type == "pass" else "reject",
         "violation_type": violation_type,
         "issue_subtype": row.get("issue_subtype") if violation_type == "image_quality" else None,
@@ -81,24 +93,31 @@ def _normalize(
         "color": row.get("color"),
         "material": row.get("material"),
         "difficulty": row.get("difficulty"),
-        "opd_enabled": row.get("opd_enabled") is True,
     }
     sample["lineage"] = {
         "dataset_stage": dataset_stage,
         "source_product_ids": sample["source_product_ids"],
-        "source_image_ids": sample["source_image_ids"],
+        "source_image_ids": source_image_ids,
         "derived_image_id": sample["derived_image_id"],
     }
+    audit = {
+        key: row[key]
+        for key in ("changed_field", "title_audit", "wrong_image_audit")
+        if key in row
+    }
+    if audit:
+        sample["changed_field"] = row.get("changed_field")
+        sample["title_audit"] = row.get("title_audit")
+        sample["wrong_image_audit"] = row.get("wrong_image_audit")
+        sample["lineage"]["audit"] = audit
     target_from_sample(sample)
     return sample
 
 
 def prepare_partition(
     source: str | Path,
-    output_root: str | Path,
     dataset_stage: str,
     split: str,
-    config: dict[str, Any],
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = read_jsonl(source)
@@ -107,21 +126,11 @@ def prepare_partition(
             raise ValueError("limit must be positive")
         rows = rows[:limit]
     if not rows:
-        raise ValueError(f"synthesis input is empty: {source}")
-
-    width = int(config.get("page_width", 960))
-    height = int(config.get("page_height", 720))
-    samples = []
-    for row in rows:
-        paths = _image_paths(row)
-        page = None
-        if dataset_stage == "eval":
-            dataset_name = str(row.get("dataset") or f"{dataset_stage}_{split}")
-            sample_id = f"{dataset_name}_{row['product_id']}"
-            page = Path(output_root) / split / "pages" / f"{sample_id}.png"
-            render_page(row, page, width, height)
-        samples.append(_normalize(row, paths, page, dataset_stage, split))
-    return samples
+        raise ValueError(f"direct dataset input is empty: {source}")
+    return [
+        _normalize(row, _image_paths(row), dataset_stage, split)
+        for row in rows
+    ]
 
 
 def _sft_rows(samples: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -157,13 +166,9 @@ def _sft_rows(samples: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _joint_rows(samples: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _grpo_rows(samples: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for index, sample in enumerate(samples):
-        opd_enabled = sample["opd_enabled"]
-        subpool = "opd" if opd_enabled else "grpo"
-        lineage = dict(sample["lineage"])
-        lineage["dataset_stage"] = subpool
         text = product_prompt(
             sample["title"],
             sample["category"],
@@ -171,44 +176,40 @@ def _joint_rows(samples: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             sample["material"],
             image_placeholders=False,
         )
-        prompt = structured_prompt(sample["images"], text)
-        row = {
-            "data_source": "vlm_product_audit",
-            "prompt": prompt,
-            "opd_enabled": opd_enabled,
-            "reward_model": {
-                "style": "rule",
-                "ground_truth": json.dumps(
-                    target_from_sample(sample),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            },
-            "ability": "product_audit",
-            "extra_info": {
-                "dataset_stage": subpool,
-                "training_stage": "joint",
-                "split": sample["split"],
-                "index": index,
-                "sample_id": sample["sample_id"],
-                "lineage": lineage,
-            },
-        }
-        if opd_enabled:
-            row["teacher_prompt"] = prompt
-        rows.append(row)
+        rows.append(
+            {
+                "data_source": "vlm_product_audit",
+                "prompt": structured_prompt(sample["images"], text),
+                "images": sample["images"],
+                "ability": "product_audit",
+                "reward_model": {
+                    "style": "rule",
+                    "ground_truth": json.dumps(
+                        target_from_sample(sample),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+                "extra_info": {
+                    "dataset_stage": "grpo",
+                    "training_stage": "grpo",
+                    "split": sample["split"],
+                    "index": index,
+                    "sample_id": sample["sample_id"],
+                    "lineage": sample["lineage"],
+                },
+            }
+        )
     return rows
 
 
-def _prepare_pair(config: dict[str, Any], stage: str, limit: int | None) -> tuple[list[dict], list[dict]]:
-    root = Path(config["pages_root"])
-    train = prepare_partition(config["source_dataset"], root, stage, "train", config, limit)
+
+def _prepare_pair(config: dict[str, Any], stage: str, limit: int | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    train = prepare_partition(config["source_dataset"], stage, "train", limit)
     validation = prepare_partition(
         config["validation_source_dataset"],
-        root,
         stage,
         "validation",
-        config,
         limit,
     )
     return train, validation
@@ -255,22 +256,18 @@ def prepare_stage(config_path: str | Path, stage: str, limit: int | None = None)
     if stage == "sft":
         train, validation = _prepare_pair(config, "sft", limit)
         return _write_sft_variants(config, train, validation)
-    if stage == "joint":
-        train, validation = _prepare_pair(config, "joint", limit)
+    if stage == "grpo":
+        train, validation = _prepare_pair(config, "grpo", limit)
         outputs = [Path(config["dataset"]), Path(config["validation_dataset"])]
-        write_jsonl(outputs[0], _joint_rows(train))
-        write_jsonl(outputs[1], _joint_rows(validation))
+        write_jsonl(outputs[0], _grpo_rows(train))
+        write_jsonl(outputs[1], _grpo_rows(validation))
         return outputs
     if stage == "eval":
-        split = str(config.get("dataset_split", "validation"))
-        samples = prepare_partition(
-            config["source_dataset"],
-            config["pages_root"],
-            "eval",
-            split,
-            config,
-            limit,
-        )
+        source = config.get("source_dataset", config.get("dataset"))
+        if not source:
+            raise ValueError("eval config requires source_dataset or dataset")
+        split = str(config.get("dataset_split", "test"))
+        samples = prepare_partition(source, "eval", split, limit)
         output = Path(config["manifest"])
         write_jsonl(output, samples)
         return [output]
@@ -279,9 +276,9 @@ def prepare_stage(config_path: str | Path, stage: str, limit: int | None = None)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Render authoritative V2 synthesis rows and export consumer formats"
+        description="Prepare direct-image JSONL data without creating composite images"
     )
-    parser.add_argument("--stage", choices=("sft", "joint", "eval", "all"), default="all")
+    parser.add_argument("--stage", choices=("sft", "grpo", "eval", "all"), default="all")
     parser.add_argument("--config", help="override the default config for one explicit stage")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
@@ -290,9 +287,12 @@ def main() -> None:
         raise ValueError("--config requires one explicit stage")
     for stage in stages:
         config_path = Path(args.config) if args.config else DEFAULT_CONFIGS[stage]
+        if not config_path.exists():
+            continue
         outputs = prepare_stage(config_path, stage, args.limit)
         print(f"prepared {stage}: {', '.join(str(path) for path in outputs)}")
 
 
 if __name__ == "__main__":
     main()
+

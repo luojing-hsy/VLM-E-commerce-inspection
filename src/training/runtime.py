@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 from packaging.version import Version
-from src.data.export_grpo_from_joint import validate_image_files
-
+from PIL import Image
 from src.models.audit_protocol import PROMPT, assert_model_text_is_sanitized, validate_prediction_dict, validate_product_prompt
 from src.models.hf_loader import QWEN35_MODEL_TYPES, require_fast_gated_deltanet_kernels
 from src.common import load_yaml, read_jsonl, sha256_file
@@ -110,27 +109,6 @@ def validate_sft_export(path: str | Path, expected_split: str) -> ExportIds:
     return ids
 
 
-def validate_opd_export(path: str | Path, expected_split: str) -> ExportIds:
-    _assert_export_name(path, expected_split)
-    rows = read_jsonl(path)
-    if not rows:
-        raise ValueError(f"OPD {expected_split} export is empty: {path}")
-    ids = _empty_export_ids()
-    for row in rows:
-        sample_id = _record_sample_id(ids, row.get("sample_id"), path)
-        if row.get("dataset_stage") != "opd":
-            raise ValueError(f"OPD row {sample_id} has wrong dataset_stage={row.get('dataset_stage')}")
-        if row.get("split") != expected_split:
-            raise ValueError(
-                f"OPD row {sample_id} has split={row.get('split')}; expected split={expected_split}"
-            )
-        full_image = row.get("full_image")
-        if not isinstance(full_image, str) or not Path(full_image).exists():
-            raise FileNotFoundError(f"OPD full image does not exist: {full_image}")
-        _record_lineage(ids, row, sample_id, path)
-    return ids
-
-
 def assert_verl_grpo_config(config: dict) -> None:
     if config.get("framework") != "verl":
         raise ValueError("GRPO requires framework=verl")
@@ -144,6 +122,17 @@ def assert_verl_grpo_config(config: dict) -> None:
         raise ValueError("ppo_mini_batch_size must divide train_batch_size * rollout_n")
     if int(config["rollout_tensor_model_parallel_size"]) > int(config["n_gpus_per_node"]):
         raise ValueError("rollout tensor parallel size cannot exceed GPUs per node")
+    filter_groups = config.get("filter_groups")
+    if filter_groups is not None:
+        if not isinstance(filter_groups, dict):
+            raise ValueError("filter_groups must be a mapping")
+        if filter_groups.get("enable", False):
+            metric = filter_groups.get("metric", "seq_final_reward")
+            if not isinstance(metric, str) or not metric:
+                raise ValueError("filter_groups.metric must be a non-empty string")
+            max_num_gen_batches = int(filter_groups.get("max_num_gen_batches", 0))
+            if max_num_gen_batches < 0:
+                raise ValueError("filter_groups.max_num_gen_batches must be non-negative")
 
 
 def assert_verl_sft_config(config: dict) -> None:
@@ -164,8 +153,6 @@ def assert_verl_sft_config(config: dict) -> None:
         raise ValueError("global SFT batch size must divide into micro batch size * world size")
 
 
-def assert_joint_config(config: dict) -> None:
-    _assert_resume_config(config)
 
 def _assert_resume_config(config: dict) -> None:
     resume_mode = config.get("resume_mode", "auto")
@@ -175,22 +162,8 @@ def _assert_resume_config(config: dict) -> None:
         resume_path = config.get("resume_from_path")
         if not resume_path or not Path(resume_path).is_dir():
             raise FileNotFoundError(f"resume checkpoint does not exist: {resume_path}")
-    assert_verl_grpo_config(config)
-    opd = config.get("opd")
-    if not isinstance(opd, dict) or opd.get("loss_mode") != "forward_kl_topk":
-        raise ValueError("joint training requires opd.loss_mode=forward_kl_topk")
-    if int(opd.get("top_k_logits", 0)) < 1:
-        raise ValueError("joint training requires a positive opd.top_k_logits")
-    if float(opd.get("loss_coefficient", 0.0)) <= 0:
-        raise ValueError("joint training requires a positive opd.loss_coefficient")
-    if not opd.get("use_task_rewards") or opd.get("use_policy_gradient"):
-        raise ValueError("joint training requires direct OPD KL combined with task rewards")
-    teacher_world_size = int(config["teacher_n_gpus_per_node"]) * int(config["teacher_nnodes"])
-    teacher_tp = int(config["teacher_tensor_model_parallel_size"])
-    if teacher_world_size < 1 or teacher_world_size % teacher_tp:
-        raise ValueError("teacher world size must be positive and divisible by teacher tensor parallel size")
     if "file" in config.get("loggers", []) and not config.get("log_file"):
-        raise ValueError("joint file logging requires log_file")
+        raise ValueError("GRPO file logging requires log_file")
 
 
 def assert_lora_targets(module_names: Iterable[str], targets: Iterable[str]) -> list[str]:
@@ -216,9 +189,28 @@ def assert_standard_lora_config(config: dict) -> None:
 
 def dependency_report(stage: str) -> dict[str, bool]:
     required = ["torch", "transformers", "accelerate", "peft"]
-    if stage in {"grpo", "joint"}:
+    if stage == "grpo":
         required.extend(["verl", "ray", "vllm"])
     return {name: importlib.util.find_spec(name) is not None for name in required}
+
+
+def validate_image_files(rows: list[dict]) -> None:
+    checked: set[Path] = set()
+    for row in rows:
+        extra_info = row.get("extra_info", {})
+        sample_id = extra_info.get("sample_id", "<unknown>")
+        for value in row.get("images", []):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{sample_id} has invalid image path: {value!r}")
+            image_path = Path(value)
+            if image_path in checked:
+                continue
+            try:
+                with Image.open(image_path) as image:
+                    image.verify()
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"{sample_id} has invalid image {image_path}: {exc}") from exc
+            checked.add(image_path)
 
 
 def validate_verl_export(path: str | Path, expected_split: str) -> ExportIds:
@@ -284,53 +276,9 @@ def _structured_image_paths(messages: object) -> list[str]:
     return [path for path in paths if isinstance(path, str)]
 
 
-def validate_joint_export(path: str | Path, expected_split: str) -> ExportIds:
-    _assert_export_name(path, expected_split)
-    rows = read_jsonl(path)
-    if not rows:
-        raise ValueError(f"joint {expected_split} export is empty: {path}")
-    ids = _empty_export_ids()
-    subpools: set[str] = set()
-    for row in rows:
-        extra_info = row.get("extra_info", {})
-        sample_id = _record_sample_id(ids, extra_info.get("sample_id"), path)
-        dataset_stage = extra_info.get("dataset_stage")
-        if dataset_stage not in {"grpo", "opd"} or extra_info.get("training_stage") != "joint":
-            raise ValueError(f"joint row {sample_id} has invalid dataset/training stage")
-        if extra_info.get("split") != expected_split:
-            raise ValueError(f"joint row {sample_id} has split={extra_info.get('split')}")
-        subpools.add(str(dataset_stage))
-
-        student_images = _structured_image_paths(row.get("prompt"))
-        if len(student_images) != 3:
-            raise ValueError(f"joint student must see main and two detail images: {sample_id}")
-        for image_path in student_images:
-            if not Path(image_path).exists():
-                raise FileNotFoundError(f"joint student image does not exist: {image_path}")
-
-        opd_enabled = row.get("opd_enabled")
-        if not isinstance(opd_enabled, bool):
-            raise ValueError(f"joint row {sample_id} is missing boolean opd_enabled")
-        teacher_images = _structured_image_paths(row.get("teacher_prompt"))
-        if teacher_images != student_images or row.get("teacher_prompt") != row.get("prompt"):
-            raise ValueError(f"teacher and student must receive the same three images and prompt: {sample_id}")
-        if opd_enabled:
-            if dataset_stage != "opd":
-                raise ValueError(f"only OPD subpool rows may enable distillation: {sample_id}")
-        elif dataset_stage != "grpo":
-            raise ValueError(f"OPD subpool row must enable distillation: {sample_id}")
-
-        validate_prediction_dict(json.loads(row.get("reward_model", {}).get("ground_truth", "")))
-        _record_lineage(ids, extra_info, sample_id, path)
-
-    if "grpo" not in subpools:
-        raise ValueError(f"joint {expected_split} export must include a GRPO subpool")
-    return ids
-
-
 def assert_pipeline_stage_isolation(manifest_root: Path) -> None:
     stage_image_ids: dict[str, set[str]] = {}
-    for stage in ("sft", "grpo", "opd"):
+    for stage in ("sft", "grpo"):
         image_ids: set[str] = set()
         for split in ("train", "validation"):
             path = manifest_root / f"{stage}_{split}.jsonl"
@@ -370,18 +318,18 @@ def validate_stage_config(config_path: str | Path, stage: str) -> dict:
     config = load_yaml(config_path)
     if config.get("stage") != stage:
         raise ValueError(f"expected stage={stage!r} in {config_path}")
-    if stage in {"sft", "opd", "grpo", "joint"}:
+    if stage in {"sft", "grpo"}:
         assert_standard_lora_config(config)
     if stage == "sft":
         assert_verl_sft_config(config)
     if stage == "grpo":
         assert_verl_grpo_config(config)
-    if stage == "joint":
-        assert_joint_config(config)
     dataset = Path(config["dataset"])
     if not dataset.exists():
         raise FileNotFoundError(f"dataset export does not exist: {dataset}; run the data pipeline first")
-    if stage in {"sft", "opd", "grpo", "joint"}:
+    if stage in {"sft", "grpo"}:
+        if stage == "grpo":
+            _assert_resume_config(config)
         validation_dataset_value = config.get("validation_dataset")
         if not validation_dataset_value:
             raise ValueError(f"{stage} requires a split-specific validation_dataset")
@@ -392,9 +340,7 @@ def validate_stage_config(config_path: str | Path, stage: str) -> dict:
             )
         validators = {
             "sft": validate_sft_export,
-            "opd": validate_opd_export,
             "grpo": validate_verl_export,
-            "joint": validate_joint_export,
         }
         validator = validators[stage]
         train_ids = validator(dataset, "train")
@@ -528,6 +474,7 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "data.max_prompt_length": config["max_prompt_length"],
         "data.max_response_length": config["max_response_length"],
         "data.filter_overlong_prompts": True,
+        "data.filter_overlong_prompts_workers": config.get("filter_overlong_prompts_workers", 1),
         "data.truncation": "error",
         "+data.apply_chat_template_kwargs": config.get("apply_chat_template_kwargs", {"enable_thinking": False}),
         "+data.mm_processor_kwargs": config.get("mm_processor_kwargs", {"min_pixels": config.get("min_pixels", 784), "max_pixels": config.get("max_pixels", 65536)}),
@@ -564,7 +511,7 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "reward.custom_reward_function.path": config["reward_function_path"],
         "reward.custom_reward_function.name": config["reward_function_name"],
         "+reward.custom_reward_function.reward_kwargs.reward_config_path": config.get(
-            "reward_config_path", "configs/joint.yaml"
+            "reward_config_path", "configs/grpo.yaml"
         ),
         "trainer.logger": config.get("loggers", ["console"]),
         "trainer.resume_mode": config.get("resume_mode", "auto"),
@@ -579,6 +526,12 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
         "trainer.test_freq": config["test_freq"],
         "trainer.total_epochs": config["total_epochs"],
     }
+    filter_groups = config.get("filter_groups")
+    if isinstance(filter_groups, dict):
+        for key in ("enable", "metric", "max_num_gen_batches"):
+            if key in filter_groups:
+                overrides[f"+algorithm.filter_groups.{key}"] = filter_groups[key]
+
     for config_key, override_key in (
         ("rollout_enforce_eager", "actor_rollout_ref.rollout.enforce_eager"),
         ("rollout_max_model_len", "actor_rollout_ref.rollout.max_model_len"),
@@ -588,29 +541,6 @@ def build_verl_command(config: dict, executable: str = "python") -> list[str]:
     ):
         if config_key in config:
             overrides[override_key] = config[config_key]
-    if config.get("stage") == "joint":
-        opd = config["opd"]
-        overrides.update(
-            {
-                "distillation.enabled": True,
-                "distillation.n_gpus_per_node": config["teacher_n_gpus_per_node"],
-                "distillation.nnodes": config["teacher_nnodes"],
-                "distillation.teacher_models.teacher_model.model_path": config["teacher_model_path"],
-                "distillation.teacher_models.teacher_model.num_replicas": 1,
-                "distillation.teacher_models.teacher_model.inference.name": config["rollout_backend"],
-                "distillation.teacher_models.teacher_model.inference.tensor_model_parallel_size": config[
-                    "teacher_tensor_model_parallel_size"
-                ],
-                "distillation.teacher_models.teacher_model.inference.gpu_memory_utilization": config[
-                    "teacher_gpu_memory_utilization"
-                ],
-                "distillation.distillation_loss.loss_mode": opd["loss_mode"],
-                "distillation.distillation_loss.topk": opd["top_k_logits"],
-                "distillation.distillation_loss.use_task_rewards": opd["use_task_rewards"],
-                "distillation.distillation_loss.distillation_loss_coef": opd["loss_coefficient"],
-                "distillation.distillation_loss.use_policy_gradient": opd["use_policy_gradient"],
-            }
-        )
     if config.get("lora_adapter_path"):
         overrides["actor_rollout_ref.model.lora_adapter_path"] = config["lora_adapter_path"]
     return [executable, "-m", config["entrypoint"], *(f"{key}={_hydra_value(value)}" for key, value in overrides.items())]
@@ -644,16 +574,7 @@ def launch_verl(config: dict) -> Path | None:
     adapter_value = config.get("lora_adapter_path")
     if adapter_value and not Path(adapter_value).exists():
         raise FileNotFoundError(f"SFT LoRA adapter does not exist: {adapter_value}")
-    if config.get("stage") == "joint":
-        student = Path(config["model_name_or_path"])
-        teacher = Path(config["teacher_model_path"])
-        if not student.exists():
-            raise FileNotFoundError(f"SFT student checkpoint does not exist: {student}")
-        if not teacher.exists():
-            raise FileNotFoundError(f"frozen SFT teacher checkpoint does not exist: {teacher}")
     subprocess.run(build_verl_command(config, sys.executable), check=True, env=_tracking_environment(config))
-    if config.get("stage") == "joint":
-        return export_joint_hf_checkpoint(config)
     return None
 
 
@@ -747,21 +668,21 @@ def _checkpoint_step(path: Path) -> int:
         return -1
 
 
-def _latest_joint_actor_checkpoint(output_dir: str | Path) -> Path:
+def _latest_grpo_actor_checkpoint(output_dir: str | Path) -> Path:
     root = Path(output_dir).resolve()
     candidates = [path for path in root.glob("global_step_*/actor") if path.is_dir()]
     if not candidates:
-        raise FileNotFoundError(f"veRL Joint produced no actor checkpoint under {root}")
+        raise FileNotFoundError(f"veRL GRPO produced no actor checkpoint under {root}")
     return max(candidates, key=lambda path: _checkpoint_step(path.parent))
 
 
-def export_joint_hf_checkpoint(config: dict) -> Path:
+def export_grpo_hf_checkpoint(config: dict) -> Path:
     """Merge the newest FSDP actor once and update a loadable ``latest`` alias."""
 
     output_dir = Path(config["output_dir"]).resolve()
-    actor = _latest_joint_actor_checkpoint(output_dir)
+    actor = _latest_grpo_actor_checkpoint(output_dir)
     if not (actor / "huggingface").is_dir():
-        raise FileNotFoundError(f"Joint actor checkpoint has no Hugging Face metadata: {actor}")
+        raise FileNotFoundError(f"GRPO actor checkpoint has no Hugging Face metadata: {actor}")
     export_root = Path(config.get("hf_export_root", output_dir / "hf_exports"))
     if not export_root.is_absolute():
         export_root = (Path.cwd() / export_root).resolve()
@@ -769,7 +690,7 @@ def export_joint_hf_checkpoint(config: dict) -> Path:
     target = export_root / actor.parent.name
     if target.exists():
         if not target.is_dir() or not (target / "config.json").is_file():
-            raise FileExistsError(f"refusing to reuse incomplete Joint HF export: {target}")
+            raise FileExistsError(f"refusing to reuse incomplete GRPO HF export: {target}")
     else:
         command = [
             sys.executable,
@@ -790,7 +711,7 @@ def export_joint_hf_checkpoint(config: dict) -> Path:
         if path.is_file() and path.suffix.lower() in {".safetensors", ".bin", ".pt"}
     ]
     if not (target / "config.json").is_file() or not weights:
-        raise FileNotFoundError(f"Joint HF export is incomplete: {target}")
+        raise FileNotFoundError(f"GRPO HF export is incomplete: {target}")
     alias = Path(config.get("latest_alias", output_dir / "latest"))
     if not alias.is_absolute():
         alias = (Path.cwd() / alias).resolve()
@@ -798,6 +719,6 @@ def export_joint_hf_checkpoint(config: dict) -> Path:
     if alias.is_symlink():
         alias.unlink()
     elif alias.exists():
-        raise FileExistsError(f"refusing to replace non-symlink Joint alias: {alias}")
+        raise FileExistsError(f"refusing to replace non-symlink GRPO alias: {alias}")
     alias.symlink_to(Path(os.path.relpath(target, alias.parent)), target_is_directory=True)
     return alias

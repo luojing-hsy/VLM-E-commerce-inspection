@@ -1,7 +1,7 @@
 # 项目工作约定（当前版本）
 
 - 以服务器项目根目录 `/root/autodl-tmp/vlm-qwen3vl` 为准，不以本地副本推断数据状态。
-- 当前规范数据集只有 `data/sft`、`data/joint`、`data/test`。
+- 当前规范数据集只有 `data/sft`、`data/GRPO`、`data/test`。
 - SFT 为 train 1,000 条、valid 100 条，难度比例 6:3:1；每个商品最多保留 3 条。
 - 难度映射固定为：易 `pass/color_mismatch/category_mismatch/material_mismatch`；中 `title_mismatch/wrong_image`；难 `duplicate_detail_image/image_quality`。
 - `image_quality` 子类型固定为 `blur`、`occlusion`、`low_resolution`。

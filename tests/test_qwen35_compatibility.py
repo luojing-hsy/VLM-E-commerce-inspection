@@ -15,19 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_default_training_configs_use_qwen35_checkpoints() -> None:
     eval_config = load_yaml(ROOT / "configs" / "eval.yaml")
     sft = load_yaml(ROOT / "configs" / "sft.yaml")
-    joint = load_yaml(ROOT / "configs" / "joint.yaml")
-    grpo = load_yaml(ROOT / "configs" / "grpo_on_joint.yaml")
+    grpo = load_yaml(ROOT / "configs" / "grpo.yaml")
+    smoke = load_yaml(ROOT / "configs" / "grpo_smoke.yaml")
 
     assert sft["model_name_or_path"].endswith("/models/Qwen3.5-4B")
     assert sft["output_dir"] == "outputs/sft_qwen35_4b"
-    assert joint["model_name_or_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
-    assert joint["teacher_model_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
     assert grpo["model_name_or_path"] == "outputs/sft_qwen35_4b/latest/huggingface"
+    assert grpo["source_dataset"] == "data/GRPO/train.jsonl"
 
     assert eval_config["require_gated_deltanet_kernels"] is True
-    assert joint["override_config"]["attn_implementation"] == "sdpa"
     assert grpo["override_config"]["attn_implementation"] == "sdpa"
-    assert load_yaml(ROOT / "configs" / "grpo_on_joint_smoke.yaml")["override_config"]["attn_implementation"] == "sdpa"
+    assert smoke["override_config"]["attn_implementation"] == "sdpa"
 
     assert eval_config["target_class_prior"]["pass"] == 0.60
 
@@ -67,7 +65,7 @@ def test_generic_loader_uses_auto_model_class(monkeypatch: pytest.MonkeyPatch) -
 def test_evaluation_entrypoints_do_not_hardcode_qwen3vl_model_class() -> None:
     for relative in (
         "src/evaluation/predict.py",
-        "src/evaluation/evaluate_synthesis.py",
+        "src/evaluation/evaluate_direct.py",
     ):
         assert "Qwen3VLForConditionalGeneration" not in (ROOT / relative).read_text(encoding="utf-8")
 

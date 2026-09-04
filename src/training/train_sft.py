@@ -6,8 +6,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from src.data.prepare_synthesis import prepare_stage
-from src.evaluation.evaluate_synthesis import run as run_evaluation
+from src.data.prepare_dataset import prepare_stage
+from src.evaluation.evaluate_direct import run as run_evaluation
 from src.training.runtime import (
     apply_resume_options,
     assert_verl_sft_config,
@@ -28,11 +28,8 @@ def _run_validation(config: dict, checkpoint: Path, training_seconds: float) -> 
         config=config.get("validation_eval_config", "configs/eval.yaml"),
         dataset=config["validation_source_dataset"],
         model=str(checkpoint),
-        pages=config.get("pages_root", "outputs/sft/runtime"),
         predictions=str(predictions),
         metrics=str(metrics),
-        page_width=int(config.get("page_width", 960)),
-        page_height=int(config.get("page_height", 720)),
         batch_size=int(config.get("validation_batch_size", 8)),
         limit=config.get("post_training_validation_max_samples"),
         split="validation",

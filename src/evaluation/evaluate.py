@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 from src.common import load_yaml, read_jsonl
-from src.evaluation.counterfactual import counterfactual_metrics
 from src.evaluation.metrics import classification_metrics, perception_metrics
 from src.models.audit_protocol import target_from_sample
 from src.evaluation.slices import slice_summary
@@ -36,15 +35,10 @@ def evaluate(config: dict, predictions_path: str | None = None, oracle_smoke: bo
     wrong_split = [row.get("sample_id") for row in samples if row.get("split") != expected_split]
     if wrong_split:
         raise ValueError(f"evaluation manifest mixes splits: {wrong_split[:5]}")
-    counterfactual_path = Path(config["counterfactual_manifest"])
-    counterfactuals = read_jsonl(counterfactual_path) if counterfactual_path.exists() else []
-    for sample in samples + counterfactuals:
+    for sample in samples:
         target_from_sample(sample)
-    wrong_cf_split = [row.get("sample_id") for row in counterfactuals if row.get("split") != expected_split]
-    if wrong_cf_split:
-        raise ValueError(f"counterfactual manifest mixes splits: {wrong_cf_split[:5]}")
     if oracle_smoke:
-        predictions = {row["sample_id"]: _oracle_prediction(row) for row in samples + counterfactuals}
+        predictions = {row["sample_id"]: _oracle_prediction(row) for row in samples}
         parse_rate = 1.0
     else:
         path = Path(predictions_path or config["predictions"])
@@ -52,7 +46,6 @@ def evaluate(config: dict, predictions_path: str | None = None, oracle_smoke: bo
     report = {
         **classification_metrics(samples, predictions, config),
         **perception_metrics(samples, predictions),
-        **counterfactual_metrics(samples, counterfactuals, predictions),
         "parse_rate": parse_rate,
         "slices": slice_summary(samples),
         "mode": "oracle_smoke" if oracle_smoke else "model_predictions",

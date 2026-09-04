@@ -1,0 +1,89 @@
+{
+  "num_evaluated": 200,
+  "detection_success_rate": 0.67,
+  "violation_detection_success_rate": 0.6971428571428572,
+  "type_inspection_success_probability": 0.635,
+  "complete_inspection_success_probability": 0.625,
+  "decision_accuracy": 0.67,
+  "violation_macro_f1": 0.5961248478276627,
+  "severe_violation_miss_rate": 0.1657142857142857,
+  "false_reject_rate": 0.08,
+  "business_risk": 0.42834285714285714,
+  "decision_confusion": {
+    "pass": {
+      "INVALID": 11,
+      "pass": 12,
+      "reject": 2
+    },
+    "reject": {
+      "reject": 122,
+      "INVALID": 24,
+      "pass": 29
+    }
+  },
+  "quality_subtype_accuracy": 0.35,
+  "image_ref_accuracy": 0.64,
+  "evidence_mean_score": 0.64,
+  "evidence_recall_at_0_5": 0.64,
+  "parse_rate": 0.825,
+  "exact_protocol_accuracy": 0.625,
+  "per_class_exact_accuracy": {
+    "category_mismatch": {
+      "count": 25,
+      "correct": 16,
+      "accuracy": 0.64
+    },
+    "color_mismatch": {
+      "count": 25,
+      "correct": 17,
+      "accuracy": 0.68
+    },
+    "duplicate_detail_image": {
+      "count": 20,
+      "correct": 3,
+      "accuracy": 0.15
+    },
+    "image_quality": {
+      "count": 20,
+      "correct": 7,
+      "accuracy": 0.35
+    },
+    "material_mismatch": {
+      "count": 25,
+      "correct": 18,
+      "accuracy": 0.72
+    },
+    "pass": {
+      "count": 25,
+      "correct": 12,
+      "accuracy": 0.48
+    },
+    "title_mismatch": {
+      "count": 30,
+      "correct": 29,
+      "accuracy": 0.9666666666666667
+    },
+    "wrong_image": {
+      "count": 30,
+      "correct": 23,
+      "accuracy": 0.7666666666666667
+    }
+  },
+  "label_counts": {
+    "category_mismatch": 25,
+    "color_mismatch": 25,
+    "duplicate_detail_image": 20,
+    "image_quality": 20,
+    "material_mismatch": 25,
+    "pass": 25,
+    "title_mismatch": 30,
+    "wrong_image": 30
+  },
+  "mode": "qwen3_5_9b_baseline",
+  "dataset": "data/test/test.jsonl",
+  "model": "/root/autodl-tmp/models/Qwen3.5-9B",
+  "split": "test",
+  "inference_seconds": 1177.769,
+  "seconds_per_sample": 5.889,
+  "peak_allocated_gib": 17.807
+}

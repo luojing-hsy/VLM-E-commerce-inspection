@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 from src.common import write_jsonl
-from src.training.runtime import validate_opd_export, validate_stage_config
+from src.training.runtime import validate_stage_config
 from src.models.audit_protocol import prompt_with_image_token
 
 
@@ -24,7 +24,7 @@ def _sft_row(
             "dataset_stage": "sft",
             "source_product_ids": [product_id],
             "source_image_ids": [source_image_id],
-            "derived_image_id": f"page:{sample_id}",
+            "derived_image_id": f"sample:{sample_id}",
         },
         "conversations": [
             {"from": "human", "value": prompt_with_image_token("Sample title", "sample_category", None, None)},
@@ -53,8 +53,8 @@ def _write_sft_config(tmp_path: Path, train: Path, validation: Path) -> Path:
 
 
 def test_sft_entry_rejects_test_row_in_train_export(tmp_path: Path) -> None:
-    image = tmp_path / "page.png"
-    image.write_bytes(b"page")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
     train = tmp_path / "sft_train.jsonl"
     validation = tmp_path / "sft_validation.jsonl"
     write_jsonl(
@@ -71,8 +71,8 @@ def test_sft_entry_rejects_test_row_in_train_export(tmp_path: Path) -> None:
 
 
 def test_sft_entry_rejects_source_product_overlap(tmp_path: Path) -> None:
-    image = tmp_path / "page.png"
-    image.write_bytes(b"page")
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
     train = tmp_path / "sft_train.jsonl"
     validation = tmp_path / "sft_validation.jsonl"
     write_jsonl(train, [_sft_row(image, "train", "train-1", "shared-product", "image-a")])
@@ -85,30 +85,3 @@ def test_sft_entry_rejects_source_product_overlap(tmp_path: Path) -> None:
         validate_stage_config(_write_sft_config(tmp_path, train, validation), "sft")
 
 
-def test_opd_entry_rejects_test_row_in_train_export(tmp_path: Path) -> None:
-    full_image = tmp_path / "page.png"
-    crop_image = tmp_path / "crop.png"
-    full_image.write_bytes(b"page")
-    crop_image.write_bytes(b"crop")
-    path = tmp_path / "opd_train.jsonl"
-    write_jsonl(
-        path,
-        [
-            {
-                "sample_id": "test-1",
-                "dataset_stage": "opd",
-                "split": "test",
-                "full_image": full_image.as_posix(),
-                "crop_images": [crop_image.as_posix()],
-                "lineage": {
-                    "dataset_stage": "opd",
-                    "source_product_ids": ["product-a"],
-                    "source_image_ids": ["image-a"],
-                    "derived_image_id": "page:test-1",
-                },
-            }
-        ],
-    )
-
-    with pytest.raises(ValueError, match="expected split=train"):
-        validate_opd_export(path, "train")
