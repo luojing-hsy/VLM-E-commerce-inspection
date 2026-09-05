@@ -97,12 +97,7 @@ def product_prompt(
     *,
     image_placeholders: bool,
 ) -> str:
-    lines = [
-        f"title: {_display_value(title)}",
-        f"category: {_display_value(category)}",
-        f"color: {_display_value(color)}",
-        f"material: {_display_value(material)}",
-    ]
+    lines = []
     if image_placeholders:
         lines.extend(
             [
@@ -111,6 +106,14 @@ def product_prompt(
                 "detail:2: <image>",
             ]
         )
+    lines.extend(
+        [
+            f"title: {_display_value(title)}",
+            f"category: {_display_value(category)}",
+            f"color: {_display_value(color)}",
+            f"material: {_display_value(material)}",
+        ]
+    )
     lines.extend(["", PROMPT])
     return "\n".join(lines)
 
@@ -146,8 +149,12 @@ def structured_prompt(image_paths: list[str], text: str) -> list[dict[str, Any]]
     if len(image_paths) != 3:
         raise ValueError("model prompt requires main and two detail images")
     validate_product_prompt(text, image_placeholders=0)
-    content = [{"type": "image", "image": str(Path(path))} for path in image_paths]
-    content.append({"type": "text", "text": text})
+    role_labels = ("main: ", "\ndetail:1: ", "\ndetail:2: ")
+    content: list[dict[str, Any]] = []
+    for label, path in zip(role_labels, image_paths):
+        content.append({"type": "text", "text": label})
+        content.append({"type": "image", "image": str(Path(path))})
+    content.append({"type": "text", "text": f"\n{text}"})
     return [{"role": "user", "content": content}]
 
 

@@ -18,8 +18,7 @@ if [[ "${1:-}" == "--dry-run" || "${1:-}" == "--print-command" ]]; then
   fi
   exec "${PYTHON}" -m src.training.train_grpo --config "${CONFIG}" --print-command
 fi
-if pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[s]ft" >/dev/null 2>&1 \
-  || pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[g]rpo" >/dev/null 2>&1; then
+if pgrep -f '([s]rc.training.train_(sft|grpo)|[v]erl.trainer.(main_ppo|sft_trainer))' >/dev/null 2>&1; then
   echo "Another project training process is already running under ${ROOT}; refusing a concurrent launch." >&2
   exit 1
 fi

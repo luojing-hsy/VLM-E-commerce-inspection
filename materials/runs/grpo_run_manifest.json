@@ -1,0 +1,123 @@
+{
+  "created_at_utc": "2026-09-04T12:08:14.410213+00:00",
+  "python": "3.12.3 | packaged by Anaconda, Inc. | (main, May  6 2024, 19:46:43) [GCC 11.2.0]",
+  "platform": "Linux-5.15.0-86-generic-x86_64-with-glibc2.35",
+  "stage": "grpo",
+  "config_sha256": "39533ed36355d0a6c1b93a3284e885a6018d708c03e8fbee717b1951089a50e5",
+  "dataset_sha256": "3ac69d82686063dd62b39a6174f009b10b8587f56eea001c7ee799cc34645a92",
+  "validation_dataset_sha256": "62aec7a2970524ad4dbe301b9d22b500c14a39ec24b37b6a638e0767c0c943a9",
+  "dependencies_available": {
+    "torch": true,
+    "transformers": true,
+    "accelerate": true,
+    "peft": true,
+    "verl": true,
+    "ray": true,
+    "vllm": true
+  },
+  "config": {
+    "stage": "grpo",
+    "framework": "verl",
+    "entrypoint": "verl.trainer.main_ppo",
+    "source_dataset": "data/GRPO/train.jsonl",
+    "validation_source_dataset": "data/GRPO/valid.jsonl",
+    "dataset": "outputs/grpo/runtime/grpo_train.jsonl",
+    "validation_dataset": "outputs/grpo/runtime/grpo_validation.jsonl",
+    "min_pixels": 784,
+    "max_pixels": 65536,
+    "override_config": {
+      "attn_implementation": "sdpa"
+    },
+    "require_gated_deltanet_kernels": true,
+    "enable_thinking": false,
+    "apply_chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "mm_processor_kwargs": {
+      "min_pixels": 784,
+      "max_pixels": 65536
+    },
+    "hf_export_root": "outputs/grpo/hf_exports",
+    "latest_alias": "outputs/grpo/latest",
+    "hf_latest_alias": "outputs/grpo/hf_latest",
+    "output_dir": "outputs/grpo",
+    "export_hf_checkpoint": true,
+    "model_name_or_path": "outputs/sft_qwen35_4b/latest/huggingface",
+    "lora_adapter_path": null,
+    "precision": "bf16",
+    "quantization": "none",
+    "learning_rate": 2e-06,
+    "rollout_n": 4,
+    "train_batch_size": 4,
+    "ppo_mini_batch_size": 4,
+    "filter_groups": {
+      "enable": true,
+      "metric": "seq_final_reward",
+      "max_num_gen_batches": 8
+    },
+    "ppo_epochs": 1,
+    "max_prompt_length": 1792,
+    "max_response_length": 256,
+    "filter_overlong_prompts_workers": 8,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "actor_strategy": "fsdp2",
+    "rollout_backend": "vllm",
+    "rollout_tensor_model_parallel_size": 1,
+    "rollout_gpu_memory_utilization": 0.5,
+    "rollout_max_model_len": 4096,
+    "rollout_max_num_seqs": 16,
+    "rollout_max_num_batched_tokens": 4096,
+    "actor_use_remove_padding": false,
+    "actor_param_offload": true,
+    "actor_optimizer_offload": true,
+    "ref_param_offload": true,
+    "ppo_max_token_len_per_gpu": 2048,
+    "max_grad_norm": 1.0,
+    "beta": 0.02,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "n_gpus_per_node": 2,
+    "nnodes": 1,
+    "total_epochs": 1,
+    "save_freq": 20,
+    "test_freq": 20,
+    "max_actor_ckpt_to_keep": 1,
+    "resume_mode": "disable",
+    "resume_from_path": null,
+    "loggers": [
+      "console",
+      "file"
+    ],
+    "log_file": "outputs/grpo/training_metrics_b4_m4_r4.jsonl",
+    "project_name": "vlm_product_audit",
+    "experiment_name": "qwen3_5_4b_grpo",
+    "reward_function_path": "src/rewards/verl_reward.py",
+    "reward_function_name": "compute_score",
+    "reward_config_path": "configs/grpo.yaml",
+    "reward_weights": {
+      "action": 0.3,
+      "type": 0.35,
+      "evidence": 0.2,
+      "subtype": 0.15
+    },
+    "evidence_gate_threshold": 0.3,
+    "evidence_gate_multiplier": 0.7,
+    "cost_matrix": {
+      "pass": {
+        "pass": 0.0,
+        "reject": 0.75
+      },
+      "reject": {
+        "pass": 1.0,
+        "reject": 0.0
+      }
+    }
+  }
+}

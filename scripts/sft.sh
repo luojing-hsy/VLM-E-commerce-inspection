@@ -14,6 +14,8 @@ if [[ -z "${OMP_NUM_THREADS:-}" || "${OMP_NUM_THREADS}" == "0" ]]; then
   export OMP_NUM_THREADS=1
 fi
 
+cd "${ROOT}"
+
 if [[ "${1:-}" == "--dry-run" || "${1:-}" == "--print-command" ]]; then
   if [[ "$#" -ne 1 ]]; then
     echo "${1} does not accept additional arguments in launcher dry-run mode." >&2
@@ -22,7 +24,7 @@ if [[ "${1:-}" == "--dry-run" || "${1:-}" == "--print-command" ]]; then
   exec "${PYTHON}" -m src.training.train_sft --config "${CONFIG}" --print-command
 fi
 
-if pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[s]ft" >/dev/null 2>&1; then
+if pgrep -f '([s]rc.training.train_(sft|grpo)|[v]erl.trainer.(main_ppo|sft_trainer))' >/dev/null 2>&1; then
   echo "An SFT training process is already running under ${ROOT}; refusing a duplicate launch." >&2
   exit 1
 fi

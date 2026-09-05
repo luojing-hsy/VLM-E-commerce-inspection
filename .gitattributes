@@ -1,2 +1,7 @@
 *.patch text eol=lf
 *.sh text eol=lf
+
+# Preserve checksummed experiment inputs and the exact server patch bytes.
+patches/verl-0.8.0-server.patch -text
+data/**/*.jsonl -text
+materials/**/*.jsonl -text

@@ -1,0 +1,967 @@
+--- a/verl/experimental/agent_loop/agent_loop.py
++++ b/verl/experimental/agent_loop/agent_loop.py
+@@ -610,7 +610,7 @@
+         """Right/left pad a flat list of token ids to a ``(1, max_length)`` tensor."""
+         self.tokenizer.padding_side = padding_side
+         padded = self.tokenizer.pad(
+-            {"input_ids": tokens},
++            {"input_ids": [tokens]},
+             padding="max_length",
+             max_length=max_length,
+             return_tensors="pt",
+@@ -916,10 +916,17 @@
+                 if routing_value is not None:
+                     # Non-tensor batch values arrive as 0-d numpy objects / arrays; normalize to Python.
+                     routing_key = routing_value.item() if hasattr(routing_value, "item") else routing_value
++            teacher_prompt_ids = output.extra_fields.pop("teacher_prompt_ids", None)
++            teacher_multi_modal_data = output.extra_fields.pop("teacher_multi_modal_data", None)
++            teacher_mm_processor_kwargs = output.extra_fields.pop("teacher_mm_processor_kwargs", None)
++            if teacher_prompt_ids is None:
++                teacher_prompt_ids = prompt_ids
++                teacher_multi_modal_data = output.multi_modal_data
++                teacher_mm_processor_kwargs = output.mm_processor_kwargs
+             teacher_ids, teacher_logprobs = await self.teacher_server_manager.compute_teacher_logprobs_single(
+-                sequence_ids=prompt_ids + response_ids,
+-                multi_modal_data=output.multi_modal_data,
+-                mm_processor_kwargs=output.mm_processor_kwargs,
++                sequence_ids=teacher_prompt_ids + response_ids,
++                multi_modal_data=teacher_multi_modal_data,
++                mm_processor_kwargs=teacher_mm_processor_kwargs,
+                 routing_key=routing_key,
+             )
+             output.extra_fields["teacher_ids"] = teacher_ids
+--- a/verl/experimental/agent_loop/single_turn_agent_loop.py
++++ b/verl/experimental/agent_loop/single_turn_agent_loop.py
+@@ -54,17 +54,44 @@
+             mm_processor_kwargs=mm_processor_kwargs,
+         )
+ 
++        # VLM_PRODUCT_AUDIT_JOINT_OPD_PATCH_V1
++        teacher_prompt_ids = None
++        teacher_multi_modal_data = None
++        teacher_mm_processor_kwargs = None
++        if bool(kwargs.get("opd_enabled", False)):
++            teacher_messages = list(kwargs.get("teacher_prompt") or [])
++            if not teacher_messages:
++                raise ValueError("opd_enabled sample is missing teacher_prompt")
++            teacher_multi_modal_data = await self.process_multi_modal_info(teacher_messages)
++            teacher_images = teacher_multi_modal_data.get("images")
++            teacher_videos = teacher_multi_modal_data.get("videos")
++            teacher_audios = teacher_multi_modal_data.get("audios")
++            teacher_mm_processor_kwargs = self._get_mm_processor_kwargs(teacher_audios)
++            teacher_prompt_ids = await self.apply_chat_template(
++                teacher_messages,
++                images=teacher_images,
++                videos=teacher_videos,
++                audios=teacher_audios,
++                mm_processor_kwargs=teacher_mm_processor_kwargs,
++            )
++
+         # 3. generate sequences
+         metrics = {}
++        request_id = uuid4().hex
+         with simple_timer("generate_sequences", metrics):
+             output: TokenOutput = await self.server_manager.generate(
+-                request_id=uuid4().hex,
++                request_id=request_id,
+                 prompt_ids=prompt_ids,
+                 sampling_params=sampling_params,
+                 image_data=images,
+                 video_data=videos,
+                 audio_data=audios,
+                 mm_processor_kwargs=mm_processor_kwargs,
++            )
++        if output.stop_reason in ("error", "aborted"):
++            raise RuntimeError(
++                f"Rollout failed: request_id={request_id}, stop_reason={output.stop_reason}, "
++                f"response_tokens={len(output.token_ids)}; check the vLLM logs for the upstream error."
+             )
+         if metrics.get("num_preempted") is None:
+             metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
+@@ -90,4 +117,12 @@
+         # keeping the schema consistent with tool_agent_loop
+         output.extra_fields.update({"turn_scores": [], "tool_rewards": []})
+ 
++        if teacher_prompt_ids is not None:
++            output.extra_fields.update(
++                {
++                    "teacher_prompt_ids": teacher_prompt_ids,
++                    "teacher_multi_modal_data": teacher_multi_modal_data,
++                    "teacher_mm_processor_kwargs": teacher_mm_processor_kwargs,
++                }
++            )
+         return output
+--- a/verl/experimental/teacher_loop/teacher_manager.py
++++ b/verl/experimental/teacher_loop/teacher_manager.py
+@@ -53,12 +53,26 @@
+     pad_token_id: int,
+ ) -> tuple[torch.Tensor, torch.Tensor]:
+     # TODO(wuxibin): remove padding and use tensordict.
+-    left_pad_size = prompt_width - prompt_length
++    # VLM_PRODUCT_AUDIT_JOINT_OPD_PATCH_V1: teacher and student prompts may differ.
++    del prompt_length
++    teacher_prompt_length = teacher_ids.shape[0] - response_length
++    if teacher_prompt_length < 0:
++        raise ValueError("teacher output is shorter than the student response")
++    teacher_response_ids = teacher_ids[teacher_prompt_length:]
++    teacher_response_logprobs = teacher_logprobs[teacher_prompt_length:]
++    prompt_ids = torch.full(
++        (prompt_width, *teacher_ids.shape[1:]), pad_token_id, dtype=teacher_ids.dtype, device=teacher_ids.device
++    )
++    prompt_logprobs = torch.zeros(
++        (prompt_width, *teacher_logprobs.shape[1:]),
++        dtype=teacher_logprobs.dtype,
++        device=teacher_logprobs.device,
++    )
+     right_pad_size = response_width - response_length
+-    padding = (0, 0, left_pad_size, right_pad_size)
++    response_padding = (0, 0, 0, right_pad_size)
+     return (
+-        F.pad(teacher_ids, padding, value=pad_token_id).unsqueeze(0),
+-        F.pad(teacher_logprobs, padding, value=0.0).unsqueeze(0),
++        torch.cat((prompt_ids, F.pad(teacher_response_ids, response_padding, value=pad_token_id))).unsqueeze(0),
++        torch.cat((prompt_logprobs, F.pad(teacher_response_logprobs, response_padding, value=0.0))).unsqueeze(0),
+     )
+ 
+ 
+--- a/verl/trainer/main_ppo.py
++++ b/verl/trainer/main_ppo.py
+@@ -238,7 +238,8 @@
+         from verl.utils.fs import copy_to_local
+ 
+         print(f"TaskRunner hostname: {socket.gethostname()}, PID: {os.getpid()}")
+-        pprint(OmegaConf.to_container(config, resolve=True))
++        if os.environ.get("VERL_PRINT_CONFIG", "0").lower() in {"1", "true", "yes"}:
++            pprint(OmegaConf.to_container(config, resolve=True))
+         OmegaConf.resolve(config)
+ 
+         actor_rollout_cls, ray_worker_group_cls = self.add_actor_rollout_worker(config)
+--- a/verl/trainer/sft_trainer.py
++++ b/verl/trainer/sft_trainer.py
+@@ -14,7 +14,9 @@
+ 
+ 
+ import os
++import time
+ from functools import partial
++from numbers import Number
+ 
+ from tensordict.tensorclass import NonTensorData
+ 
+@@ -38,6 +40,7 @@
+ from verl.utils.device import auto_set_device, get_device_name
+ from verl.utils.distributed import destroy_global_process_group
+ from verl.utils.logger import log_with_rank
++from verl.utils.metric import Metric
+ from verl.utils.memory_utils import aggressive_empty_cache
+ from verl.utils.profiler import log_gpu_memory_usage
+ from verl.utils.tracking import Tracking
+@@ -45,6 +48,17 @@
+ 
+ logger = logging.getLogger(__file__)
+ logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
++
++
++def _aggregate_sft_metric(value):
++    if isinstance(value, Metric):
++        return value.aggregate()
++    if isinstance(value, (list, tuple)):
++        values = [_aggregate_sft_metric(item) for item in value]
++        if values and all(isinstance(item, Number) for item in values):
++            return sum(values) / len(values)
++        return values
++    return value
+ 
+ 
+ class SFTTrainer:
+@@ -353,6 +367,10 @@
+ 
+         train_time = 0
+         total_tokens = 0
++        # VLM_PRODUCT_AUDIT_SFT_PROGRESS_V1
++        progress_started = time.perf_counter()
++        samples_seen = self.resume_global_step * self.global_batch_size
++        next_progress_sample = ((samples_seen // 20) + 1) * 20
+         for epoch in range(start_epoch, self.config.trainer.total_epochs):
+             self.train_sampler.set_epoch(epoch=epoch)
+ 
+@@ -391,15 +409,31 @@
+                     metrics = tu.get(output, "metrics")
+ 
+                     # TODO: we can actual accumulate metrics for N steps and perform aggregate metrics
+-                    for k in ["loss", "grad_norm", "lr", "mfu"]:
++                    # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++                    for k in ["loss", "full_completion_loss", "semantic_token_loss", "grad_norm", "lr", "mfu"]:
+                         if k in metrics.keys():
+-                            value = metrics.pop(k)
++                            value = _aggregate_sft_metric(metrics.pop(k))
+                             metrics[f"train/{k}"] = value
+ 
+                     metrics["train/global_tokens"] = torch.sum(
+                         torch.tensor(batch_seqlens, device=self.device_name)
+                     ).item()
+                     total_tokens += metrics["train/global_tokens"]
++                    samples_seen += len(batch_seqlens)
++                    if samples_seen >= next_progress_sample and is_logging:
++                        elapsed = max(time.perf_counter() - progress_started, 1e-6)
++                        rate = samples_seen / elapsed
++                        total_samples = self.total_training_steps * self.global_batch_size
++                        remaining = max(total_samples - samples_seen, 0)
++                        eta = remaining / rate if rate > 0 else float("inf")
++                        print(
++                            f"[SFT progress] samples={samples_seen}/{total_samples} "
++                            f"step={global_step}/{self.total_training_steps} "
++                            f"rate={rate:.2f} samples/s elapsed={elapsed:.1f}s ETA={eta:.1f}s",
++                            flush=True,
++                        )
++                        while next_progress_sample <= samples_seen:
++                            next_progress_sample += 20
+                     metrics["train/total_tokens(B)"] = total_tokens / 1e9
+ 
+                     if self.engine.get_data_parallel_rank() == 0:
+@@ -412,24 +446,40 @@
+                 # early exit or validation step
+                 if is_last_step and self.val_dataloader is not None or (self.test_freq > 0 and is_valid_step):
+                     # Perform validation
+-                    val_losses = []
++                    val_metric_values = {
++                        "loss": [],
++                        "full_completion_loss": [],
++                        "semantic_token_loss": [],
++                    }
+                     for val_data in self.val_dataloader:
+                         val_data = tu.get_tensordict(tensor_dict=val_data, non_tensor_dict=meta_info)
+                         output = self.training_client.infer_batch(val_data)
+ 
+                         if self.engine.is_mp_src_rank_with_outputs():
+                             metrics = tu.get(output, "metrics")
+-                            val_losses.append(metrics["loss"])
+-
++                            for name in val_metric_values:
++                                if name in metrics:
++                                    val_metric_values[name].append(_aggregate_sft_metric(metrics[name]))
++
++                    reduced_val_metrics = {}
+                     if self.engine.is_mp_src_rank_with_outputs():
+-                        val_loss = torch.mean(torch.tensor(val_losses, device=self.device_name))
+-                        # average over data parallel group
+                         dp_group = self.engine.get_data_parallel_group()
+-                        if dp_group is not None:
+-                            torch.distributed.all_reduce(val_loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
++                        for name, values in val_metric_values.items():
++                            if not values:
++                                continue
++                            value = torch.mean(
++                                torch.tensor(values, device=self.device_name)
++                            )
++                            if dp_group is not None:
++                                torch.distributed.all_reduce(
++                                    value,
++                                    op=torch.distributed.ReduceOp.AVG,
++                                    group=dp_group,
++                                )
++                            reduced_val_metrics[f"val/{name}"] = value.detach().item()
+ 
+                     if is_logging:
+-                        metric = {"val/loss": val_loss.detach().item()}
++                        metric = reduced_val_metrics
+                         tracking.log(data=metric, step=global_step)
+                         last_valid_metric = metric
+                     torch.distributed.barrier()
+--- a/verl/trainer/distillation/losses.py
++++ b/verl/trainer/distillation/losses.py
+@@ -237,6 +237,15 @@
+     """
+     assert distillation_config is not None
+     loss_config: DistillationLossConfig = distillation_config.distillation_loss
++    # VLM_PRODUCT_AUDIT_JOINT_OPD_PATCH_V1
++    response_mask = data.get("distillation_weights", data["response_mask"])
++    active_mask = response_mask.bool()
++    if not active_mask.any():
++        zero = model_output["log_probs"].sum() * 0.0
++        return zero, {
++            "distillation/active_tokens": 0.0,
++            "distillation/active_weight": 0.0,
++        }
+     distillation_loss_fn = get_distillation_loss_fn(loss_config.loss_mode)
+     distillation_losses, distillation_metrics = distillation_loss_fn(
+         config=config,
+@@ -244,7 +253,6 @@
+         model_output=model_output,
+         data=data,
+     )
+-    response_mask = data["response_mask"]
+     loss_agg_mode = config.loss_agg_mode
+ 
+     distillation_metrics.update(
+@@ -288,6 +296,8 @@
+             **config.global_batch_info,
+         )
+ 
++    distillation_metrics["distillation/active_tokens"] = active_mask.sum().item()
++    distillation_metrics["distillation/active_weight"] = response_mask.sum().item()
+     return distillation_loss, distillation_metrics
+ 
+ 
+@@ -313,10 +323,11 @@
+     if overlap_count is not None and overlap_token_advantage is not None:
+         overlap_count = no_padding_2_padding(overlap_count, data)
+         overlap_token_advantage = no_padding_2_padding(overlap_token_advantage, data)
+-    if data["response_mask"].is_nested:
+-        response_mask_bool = data["response_mask"].bool().to_padded_tensor(False)
++    metric_mask = data.get("distillation_weights", data["response_mask"])
++    if metric_mask.is_nested:
++        response_mask_bool = metric_mask.bool().to_padded_tensor(False)
+     else:
+-        response_mask_bool = data["response_mask"].bool()
++        response_mask_bool = metric_mask.bool()
+     assert distillation_losses.shape == student_mass.shape == teacher_mass.shape == response_mask_bool.shape
+ 
+     overlap_metrics = {}
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -980,6 +980,12 @@
+         )
+ 
+         print(f"local_global_step_folder: {local_global_step_folder}")
++        # VLM_PRODUCT_AUDIT_GRPO_LATEST_ONLY_V1: delete old raw checkpoints first.
++        from src.training.grpo_checkpoint_policy import prepare_latest_checkpoint
++        prepare_latest_checkpoint(
++            self.config.trainer.default_local_dir,
++            local_global_step_folder,
++        )
+         actor_local_path = os.path.join(local_global_step_folder, "actor")
+ 
+         actor_remote_path = (
+@@ -1023,6 +1029,13 @@
+         dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
+         dataloader_state_dict = self.train_dataloader.state_dict()
+         torch.save(dataloader_state_dict, dataloader_local_path)
++
++        # VLM_PRODUCT_AUDIT_GRPO_LATEST_ONLY_V1: publish only a complete checkpoint.
++        from src.training.grpo_checkpoint_policy import finalize_latest_checkpoint
++        finalize_latest_checkpoint(
++            self.config.trainer.default_local_dir,
++            local_global_step_folder,
++        )
+ 
+         # latest checkpointed iteration tracker (for atomic usage)
+         if (
+@@ -1411,6 +1424,28 @@
+         last_val_metrics = None
+         self.max_steps_duration = 0
+ 
++        # VLM_PRODUCT_AUDIT_GRPO_ZERO_VARIANCE_FILTER_V1
++        # DAPO-style dynamic sampling: keep only groups with non-zero reward variance.
++        filter_groups = self.config.algorithm.get("filter_groups", None)
++        filter_groups_enabled = bool(filter_groups and filter_groups.get("enable", False))
++        filter_groups_metric = (
++            str(filter_groups.get("metric", "seq_final_reward"))
++            if filter_groups_enabled
++            else None
++        )
++        filter_groups_max_num_gen_batches = (
++            int(filter_groups.get("max_num_gen_batches", 0))
++            if filter_groups_enabled
++            else 0
++        )
++        filter_groups_zero_variance_eps = 1e-8
++        filter_pending_batch = None
++        filter_pending_uids: set[str] = set()
++        # VLM_PRODUCT_AUDIT_GRPO_FILTER_REWARD_MEAN_V1
++        filter_pending_stats = {"generated": 0, "kept": 0, "filtered": 0, "fallback": 0, "filtered_reward_sum": 0.0, "filtered_reward_count": 0}
++        filter_pending_gen_batches = 0
++        filter_step_active = False
++
+         prev_step_profile = False
+         curr_step_profile = (
+             self.global_steps in self.config.global_profiler.steps
+@@ -1423,8 +1458,18 @@
+             for batch_dict in self.train_dataloader:
+                 if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
+                     self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=False)
+-                metrics = {}
+-                timing_raw = {}
++                if filter_groups_enabled and filter_step_active:
++                    metrics = filter_pending_metrics
++                    timing_raw = filter_pending_timing
++                else:
++                    metrics = {}
++                    timing_raw = defaultdict(float) if filter_groups_enabled else {}
++                    if filter_groups_enabled:
++                        filter_pending_metrics = metrics
++                        filter_pending_timing = timing_raw
++                        filter_pending_stats = {"generated": 0, "kept": 0, "filtered": 0, "fallback": 0, "filtered_reward_sum": 0.0, "filtered_reward_count": 0}
++                        filter_pending_gen_batches = 0
++                        filter_step_active = True
+ 
+                 with marked_timer("start_profile", timing_raw):
+                     self._start_profiling(
+@@ -1494,34 +1539,171 @@
+                         del gen_baseline_output
+                     del combined_gen_batch, combined_gen_output
+                     # repeat to align with repeated responses in rollout
+-                    batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+-                    batch = batch.union(gen_batch_output)
+-
+-                    if "response_mask" not in batch.batch.keys():
+-                        batch.batch["response_mask"] = compute_response_mask(batch)
++                    new_batch = batch.repeat(
++                        repeat_times=self.config.actor_rollout_ref.rollout.n,
++                        interleave=True,
++                    )
++                    new_batch = new_batch.union(gen_batch_output)
++
++                    if "response_mask" not in new_batch.batch.keys():
++                        new_batch.batch["response_mask"] = compute_response_mask(new_batch)
+                     # Balance the number of valid tokens across DP ranks.
+-                    # NOTE: This usually changes the order of data in the `batch`,
+-                    # which won't affect the advantage calculation (since it's based on uid),
+-                    # but might affect the loss calculation (due to the change of mini-batching).
++                    # NOTE: This usually changes the order of data in the `new_batch`,
++                    # which does not affect group filtering because uid is preserved.
+                     if self.config.trainer.balance_batch:
+-                        self._balance_batch(batch, metrics=metrics)
+-
+-                    # compute global_valid tokens
+-                    batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+-                    # get images_seqlens
++                        self._balance_batch(new_batch, metrics=metrics)
++
++                    new_batch.meta_info["global_token_num"] = torch.sum(
++                        new_batch.batch["attention_mask"], dim=-1
++                    ).tolist()
+                     images_seqlens_all = []
+-                    for multi_modal_input in batch.non_tensor_batch["multi_modal_inputs"]:
++                    for multi_modal_input in new_batch.non_tensor_batch["multi_modal_inputs"]:
+                         if "image_grid_thw" not in multi_modal_input.keys():
+                             continue
+                         images_seqlens_all.extend(multi_modal_input["images_seqlens"].tolist())
+-                    batch.meta_info["images_seqlens"] = images_seqlens_all
++                    new_batch.meta_info["images_seqlens"] = images_seqlens_all
+                     with marked_timer("reward", timing_raw, color="yellow"):
+                         # compute reward model score
+-                        if self.use_rm and "rm_scores" not in batch.batch.keys():
+-                            batch_reward = self._compute_reward_colocate(batch)
+-                            batch = batch.union(batch_reward)
+-
+-                        # extract reward_tensor and reward_extra_infos_dict for training
++                        if self.use_rm and "rm_scores" not in new_batch.batch.keys():
++                            batch_reward = self._compute_reward_colocate(new_batch)
++                            new_batch = new_batch.union(batch_reward)
++
++                        # Keep the reward fields on the generated batch. If filtering is enabled,
++                        # extraction is repeated after concatenating qualified groups.
++                        new_reward_tensor, _ = extract_reward(new_batch)
++                        new_batch.batch["token_level_scores"] = new_reward_tensor
++                        new_batch.batch["token_level_rewards"] = new_batch.batch["token_level_scores"]
++
++                    if filter_groups_enabled:
++                        if filter_groups_metric in {"seq_final_reward", "seq_reward", "score"}:
++                            metric_values = (
++                                new_batch.batch["token_level_scores"]
++                                .sum(dim=-1)
++                                .detach()
++                                .cpu()
++                                .numpy()
++                            )
++                        elif filter_groups_metric in new_batch.non_tensor_batch:
++                            metric_values = np.asarray(
++                                new_batch.non_tensor_batch[filter_groups_metric], dtype=np.float64
++                            )
++                        else:
++                            raise KeyError(
++                                f"filter_groups.metric={filter_groups_metric!r} is not present in the generated batch"
++                            )
++
++                        reward_values = (
++                            new_batch.batch["token_level_scores"]
++                            .sum(dim=-1)
++                            .detach()
++                            .cpu()
++                            .numpy()
++                        )
++                        prompt_uid2metric_vals = defaultdict(list)
++                        prompt_uid2reward_vals = defaultdict(list)
++                        for uid, metric_value, reward_value in zip(
++                            new_batch.non_tensor_batch["uid"], metric_values, reward_values, strict=True
++                        ):
++                            prompt_uid2metric_vals[str(uid)].append(float(metric_value))
++                            prompt_uid2reward_vals[str(uid)].append(float(reward_value))
++
++                        kept_prompt_uids = []
++                        for uid, values in prompt_uid2metric_vals.items():
++                            std = float(np.std(values))
++                            if std > filter_groups_zero_variance_eps or len(values) == 1:
++                                kept_prompt_uids.append(uid)
++                            else:
++                                filter_pending_stats["filtered_reward_sum"] += float(np.mean(prompt_uid2reward_vals[uid]))
++                                filter_pending_stats["filtered_reward_count"] += 1
++
++                        filter_pending_stats["generated"] += len(prompt_uid2metric_vals)
++                        filter_pending_stats["kept"] += len(kept_prompt_uids)
++                        filter_pending_stats["filtered"] += (
++                            len(prompt_uid2metric_vals) - len(kept_prompt_uids)
++                        )
++                        kept_prompt_uid_set = set(kept_prompt_uids)
++                        kept_traj_idxs = [
++                            idx
++                            for idx, uid in enumerate(new_batch.non_tensor_batch["uid"])
++                            if str(uid) in kept_prompt_uid_set
++                        ]
++                        if kept_traj_idxs:
++                            kept_batch = new_batch[kept_traj_idxs]
++                            # DataProto indexing keeps the original meta_info object. Remove
++                            # per-sample metadata before concatenating batches from retries.
++                            kept_batch.meta_info = dict(kept_batch.meta_info)
++                            kept_batch.meta_info.pop("global_token_num", None)
++                            kept_batch.meta_info.pop("images_seqlens", None)
++                            filter_pending_batch = (
++                                kept_batch
++                                if filter_pending_batch is None
++                                else DataProto.concat([filter_pending_batch, kept_batch])
++                            )
++                            filter_pending_uids.update(kept_prompt_uids)
++
++                        filter_pending_gen_batches += 1
++                        prompt_bsz = int(self.config.data.train_batch_size)
++                        if len(filter_pending_uids) < prompt_bsz:
++                            if (
++                                filter_groups_max_num_gen_batches > 0
++                                and filter_pending_gen_batches >= filter_groups_max_num_gen_batches
++                            ):
++                                # Do not leave an empty/undersized batch at the cap. This fallback
++                                # keeps the run progressing and records the event for inspection.
++                                print(
++                                    "[GRPO zero-variance filter] generation cap reached; "
++                                    "using the current batch without filtering"
++                                )
++                                batch = new_batch[: prompt_bsz * self.config.actor_rollout_ref.rollout.n]
++                                filter_pending_stats["fallback"] += 1
++                                filter_pending_batch = None
++                                filter_pending_uids.clear()
++                                filter_pending_gen_batches = 0
++                            else:
++                                # Discard the zero-variance group and consume the next prompt.
++                                # Generation slept the vLLM replicas to run the colocated reward model;
++                                # wake them before retrying the next rollout.
++                                self.checkpoint_manager.update_weights(self.global_steps)
++                                continue
++                        else:
++                            # Select whole prompt groups in their first-seen order. A plain
++                            # trajectory slice could split a rollout group and corrupt GRPO
++                            # normalization when train_batch_size > 1.
++                            pending_uids = [
++                                str(uid) for uid in filter_pending_batch.non_tensor_batch["uid"]
++                            ]
++                            selected_uids = []
++                            selected_uid_set = set()
++                            for uid in pending_uids:
++                                if uid not in selected_uid_set:
++                                    selected_uids.append(uid)
++                                    selected_uid_set.add(uid)
++                                if len(selected_uids) >= prompt_bsz:
++                                    break
++                            selected_idxs = [
++                                idx for idx, uid in enumerate(pending_uids) if uid in selected_uid_set
++                            ]
++                            batch = filter_pending_batch[selected_idxs]
++                            filter_pending_batch = None
++                            filter_pending_uids.clear()
++                            filter_pending_gen_batches = 0
++
++                        # Recompute per-sample metadata after filtering; DataProto selection
++                        # does not slice meta_info.
++                        batch.meta_info["global_token_num"] = torch.sum(
++                            batch.batch["attention_mask"], dim=-1
++                        ).tolist()
++                        images_seqlens_all = []
++                        for multi_modal_input in batch.non_tensor_batch["multi_modal_inputs"]:
++                            if "image_grid_thw" not in multi_modal_input.keys():
++                                continue
++                            images_seqlens_all.extend(multi_modal_input["images_seqlens"].tolist())
++                        batch.meta_info["images_seqlens"] = images_seqlens_all
++
++                        # Extract reward fields only after the final qualified batch is assembled.
++                        reward_tensor, reward_extra_infos_dict = extract_reward(batch)
++                    else:
++                        batch = new_batch
+                         reward_tensor, reward_extra_infos_dict = extract_reward(batch)
+ 
+                     # Operating Mode Selection:
+@@ -1746,11 +1928,38 @@
+                     )
+                 )
+ 
++                if filter_groups_enabled:
++                    generated_groups = filter_pending_stats["generated"]
++                    metrics.update(
++                        {
++                            "grpo/filter_generated_groups": generated_groups,
++                            "grpo/filter_kept_groups": filter_pending_stats["kept"],
++                            "grpo/filter_zero_variance_groups": filter_pending_stats["filtered"],
++                            "grpo/filter_fallback_batches": filter_pending_stats["fallback"],
++                            "grpo/filter_zero_variance_ratio": (
++                                filter_pending_stats["filtered"] / generated_groups
++                                if generated_groups
++                                else 0.0
++                            ),
++                            "grpo/filter_zero_variance_group_reward_mean": (
++                                filter_pending_stats["filtered_reward_sum"] / filter_pending_stats["filtered_reward_count"]
++                                if filter_pending_stats["filtered_reward_count"]
++                                else 0.0
++                            ),
++                        }
++                    )
++
+                 # TODO: make a canonical logger that supports various backend
+                 logger.log(data=metrics, step=self.global_steps)
+ 
+                 progress_bar.update(1)
+                 self.global_steps += 1
++
++                if filter_groups_enabled:
++                    filter_step_active = False
++                    filter_pending_batch = None
++                    filter_pending_uids.clear()
++                    filter_pending_gen_batches = 0
+ 
+                 if is_last_step:
+                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
+@@ -1768,3 +1977,15 @@
+ 
+         # Ensure dump executor is shut down when training loop ends without reaching is_last_step
+         self._shutdown_dump_executor()
++        # VLM_PRODUCT_AUDIT_GRPO_FINAL_CHECKPOINT_V1: save the actual final processed step.
++        final_step = self.global_steps - 1
++        if final_step > 0 and (
++            self.config.trainer.save_freq <= 0
++            or final_step % self.config.trainer.save_freq != 0
++        ):
++            previous_global_step = self.global_steps
++            self.global_steps = final_step
++            try:
++                self._save_checkpoint()
++            finally:
++                self.global_steps = previous_global_step
+--- a/verl/utils/attention_utils.py
++++ b/verl/utils/attention_utils.py
+@@ -27,7 +27,15 @@
+     if is_torch_npu_available(check_device=False):
+         from verl.utils.npu_flash_attn_utils import index_first_axis, pad_input, rearrange, unpad_input
+     else:
+-        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
++        try:
++            from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
++        except ImportError:
++            from einops import rearrange
++            from transformers.modeling_flash_attention_utils import (
++                _index_first_axis as index_first_axis,
++                _pad_input as pad_input,
++                _unpad_input as unpad_input,
++            )
+ 
+     _index_first_axis, _pad_input, _rearrange, _unpad_input = index_first_axis, pad_input, rearrange, unpad_input
+ 
+--- a/verl/utils/tensordict_utils.py
++++ b/verl/utils/tensordict_utils.py
+@@ -180,6 +180,57 @@
+     nested_tensor = torch.nested.nested_tensor_from_jagged(values=values, offsets=offsets)
+     nested_tensor._ragged_idx = ragged_idx
+     return nested_tensor
++
++
++def _index_select_nested_tensor_rows(tensor: torch.Tensor, indices: list[int]) -> torch.Tensor:
++    """Select rows from a jagged tensor without relying on a buggy unbind path."""
++    indices = [int(index) for index in indices]
++    ragged_idx = getattr(tensor, "_ragged_idx", tensor.dim() - 1)
++    try:
++        tensor_list = tensor.unbind()
++    except RuntimeError:
++        values = tensor.values()
++        offsets = tensor.offsets()
++        candidate_dim = ragged_idx - 1
++        if not 0 <= candidate_dim < values.dim():
++            candidate_dim = values.dim() - 1
++
++        offsets_end = int(offsets[-1].item())
++        if offsets_end == values.shape[candidate_dim]:
++            concat_dim = candidate_dim
++        elif offsets_end == values.shape[0]:
++            # PyTorch 2.11 mis-tags Qwen mRoPE tensors whose values are laid out
++            # as [batch * 4, sequence_length].
++            concat_dim = 0
++        else:
++            raise
++
++        lengths = offsets.diff()
++        selected_tensors = [
++            values.narrow(concat_dim, int(offsets[index].item()), int(lengths[index].item()))
++            for index in indices
++        ]
++        selected_values = torch.cat(selected_tensors, dim=concat_dim)
++        selected_lengths = torch.tensor(
++            [int(lengths[index].item()) for index in indices],
++            dtype=offsets.dtype,
++            device=offsets.device,
++        )
++        selected_offsets = torch.zeros(
++            len(indices) + 1,
++            dtype=offsets.dtype,
++            device=offsets.device,
++        )
++        selected_offsets[1:] = torch.cumsum(selected_lengths, dim=0)
++        selected_tensor = torch.nested.nested_tensor_from_jagged(
++            values=selected_values,
++            offsets=selected_offsets,
++        )
++        selected_tensor._ragged_idx = ragged_idx
++        return selected_tensor
++
++    selected_tensors = [tensor_list[index] for index in indices]
++    return nested_tensor_from_tensor_list(selected_tensors, ragged_idx=ragged_idx)
+ 
+ 
+ def concat_nested_tensors(tensors: list[torch.Tensor]) -> torch.Tensor:
+@@ -492,11 +543,7 @@
+             if isinstance(tensor, torch.Tensor) and not tensor.is_nested:
+                 data_dict[key] = tensor[indices]
+             elif isinstance(tensor, torch.Tensor) and tensor.is_nested:
+-                tensor_lst = tensor.unbind()  # for performance
+-                selected_tensors = [tensor_lst[idx] for idx in indices]
+-                data_dict[key] = nested_tensor_from_tensor_list(
+-                    selected_tensors, ragged_idx=getattr(tensor, "_ragged_idx", tensor.dim() - 1)
+-                )
++                data_dict[key] = _index_select_nested_tensor_rows(tensor, indices)
+             else:
+                 # This handles NonTensorStack (indexable by batch dim) and NonTensorData (scalar metadata).
+                 if tensor.shape:
+--- a/verl/utils/tracking.py
++++ b/verl/utils/tracking.py
+@@ -280,7 +280,8 @@
+             os.makedirs(directory, exist_ok=True)
+             self.filepath = os.path.join(directory, f"{self.experiment_name}.jsonl")
+         print(f"Creating file logger at {os.path.abspath(self.filepath)}")
+-        self.fp = open(self.filepath, "wb", buffering=0)
++        # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++        self.fp = open(self.filepath, "ab", buffering=0)
+ 
+     def log(self, data, step):
+         data = {"step": step, "data": data}
+--- a/verl/utils/checkpoint/checkpoint_handler.py
++++ b/verl/utils/checkpoint/checkpoint_handler.py
+@@ -93,6 +93,12 @@
+ 
+         # Determine checkpoint path
+         local_global_step_folder = os.path.join(self.default_local_dir, f"global_step_{step}")
++        # VLM_PRODUCT_AUDIT_SFT_LATEST_ONLY_V1
++        from src.training.sft_checkpoint_policy import prepare_latest_checkpoint
++        if self.rank == 0:
++            prepare_latest_checkpoint(self.default_local_dir, local_global_step_folder)
++        if self.mode == OrchestrationMode.SPMD:
++            torch.distributed.barrier()
+         if self.rank == 0:
+             print(f"Saving checkpoint to: {local_global_step_folder}")
+ 
+@@ -122,6 +128,14 @@
+             dataloader_state_dict = self.train_dataloader.state_dict()
+             torch.save(dataloader_state_dict, dataloader_local_path)
+             print(f"Saved dataloader state to: {dataloader_local_path}")
++
++        if self.mode == OrchestrationMode.SPMD:
++            torch.distributed.barrier()
++        if self.rank == 0:
++            from src.training.sft_checkpoint_policy import finalize_latest_checkpoint
++            finalize_latest_checkpoint(local_global_step_folder)
++        if self.mode == OrchestrationMode.SPMD:
++            torch.distributed.barrier()
+ 
+         if self.rank == 0:
+             # Update latest checkpoint tracker (atomic write)
+--- a/verl/utils/dataset/rl_dataset.py
++++ b/verl/utils/dataset/rl_dataset.py
+@@ -320,6 +320,13 @@
+             assert self.processor is not None, "processor is needed to process multimodal data"
+ 
+             content = message["content"]
++            if isinstance(content, list):
++                image_offset += sum(
++                    1 for part in content
++                    if isinstance(part, dict) and part.get("type") == "image"
++                )
++                continue
++
+             if not isinstance(content, str):
+                 continue
+ 
+@@ -333,12 +340,17 @@
+                     if isinstance(image, Image.Image):
+                         image = image.convert("RGB")
+                         content_list.append({"type": "image", "image": image})
++                    # VLM_PRODUCT_AUDIT_JSONL_IMAGE_PATH_PATCH_V1
++                    elif isinstance(image, (str, os.PathLike)):
++                        content_list.append({"type": "image", "image": os.fspath(image)})
+                     elif isinstance(image, dict):
+                         if "bytes" in image:
+                             image["image"] = Image.open(BytesIO(image["bytes"]))
+                         content_list.append({"type": "image", **image})
+                     else:
+-                        raise TypeError(f"image must be dict or PIL.Image, unsupported image type: {type(image)}")
++                        raise TypeError(
++                            f"image must be a path, dict, or PIL.Image, unsupported image type: {type(image)}"
++                        )
+                     image_offset += 1
+                 elif segment == "<video>":
+                     assert video_offset < len(videos), f"video_offset {video_offset} >= len(videos) {len(videos)}"
+--- a/verl/workers/config/model.py
++++ b/verl/workers/config/model.py
+@@ -119,6 +119,13 @@
+ 
+     use_remove_padding: bool = True
+ 
++    # VLM_PRODUCT_AUDIT_MM_PROJECTOR_PATCH_V1
++    # Keep the vision encoder frozen during project-specific SFT.
++    freeze_vision_encoder: bool = True
++
++    # Train Qwen3-VL's visual merger (the MM projector) with the language LoRA.
++    train_mm_projector: bool = False
++
+     # TODO: unify fsdp and megatron lora config
+     # fsdp lora related. We may setup a separate config later
+     lora_rank: int = 0
+@@ -160,6 +167,11 @@
+             self.local_tokenizer_path = copy_to_local(self.tokenizer_path, use_shm=self.use_shm)
+             self.tokenizer = hf_tokenizer(self.local_tokenizer_path, trust_remote_code=self.trust_remote_code)
+             self.processor = hf_processor(self.local_tokenizer_path, trust_remote_code=self.trust_remote_code)
++            if self.processor is not None:
++                for key in ("min_pixels", "max_pixels"):
++                    value = self.override_config.get(key)
++                    if value is not None:
++                        setattr(self.processor.image_processor, key, int(value))
+ 
+         # For base models (e.g. Qwen3.5-2b-Base), the processor may not have a chat_template
+         # while the tokenizer does. Sync it so that processor.apply_chat_template() works.
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -337,6 +337,39 @@
+ 
+         return module
+ 
++    @staticmethod
++    def _has_module_path(name: str, *components: str) -> bool:
++        parts = name.split(".")
++        width = len(components)
++        return any(
++            parts[index : index + width] == list(components)
++            for index in range(len(parts) - width + 1)
++        )
++
++    def _configure_mm_projector_training(self, module):
++        if self.model_config.freeze_vision_encoder:
++            for name, parameter in module.named_parameters():
++                if self._has_module_path(name, "visual"):
++                    parameter.requires_grad = False
++
++        if not self.model_config.train_mm_projector:
++            return
++
++        projector_parameters = [
++            (name, parameter)
++            for name, parameter in module.named_parameters()
++            if self._has_module_path(name, "visual", "merger")
++        ]
++        if not projector_parameters:
++            raise ValueError("train_mm_projector=True but no visual.merger parameters were found")
++
++        for _, parameter in projector_parameters:
++            parameter.requires_grad = True
++        logger.info(
++            "Enabled MM projector training for %d parameters while keeping vision encoder frozen",
++            len(projector_parameters),
++        )
++
+     def _build_fsdp_module(self, module):
+         # TODO(ziheng): need to improve
+         from torch.distributed.fsdp import CPUOffload, MixedPrecision
+@@ -548,6 +581,7 @@
+         # Apply LoRA adapters if low-rank adaptation is enabled
+         if self._is_lora:
+             module = self._build_lora_module(module)
++        self._configure_mm_projector_training(module)
+ 
+         # Apply QAT before FSDP wrapping (training only)
+         if self._qat_enabled and not self.engine_config.forward_only:
+@@ -624,6 +658,13 @@
+             batch_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
+         )
+         tu.assign_non_tensor(data, batch_num_tokens=batch_num_tokens.item())
++        # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++        if "semantic_loss_mask" in data:
++            batch_num_semantic_tokens = data["semantic_loss_mask"].sum().to(get_device_id())
++            torch.distributed.all_reduce(
++                batch_num_semantic_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
++            )
++            tu.assign_non_tensor(data, batch_num_semantic_tokens=batch_num_semantic_tokens.item())
+         tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
+ 
+         micro_batches, indices = prepare_micro_batches(
+@@ -816,6 +857,14 @@
+                 )
+                 if not base_sync_done:
+                     params = {replace_lora_wrapper(k, peft_config): v for k, v in params.items()}
++                if self.model_config.train_mm_projector:
++                    params.update(
++                        {
++                            name: parameter
++                            for name, parameter in self.module.state_dict().items()
++                            if self._has_module_path(name, "visual", "merger")
++                        }
++                    )
+             else:  # merge lora
+                 with merged_lora_context(self.module, backup_adapters=True):
+                     params = self.module.state_dict()
+--- a/verl/workers/rollout/vllm_rollout/vllm_async_server.py
++++ b/verl/workers/rollout/vllm_rollout/vllm_async_server.py
+@@ -945,6 +945,8 @@
+         else:
+             sleep_level = 2
+         await self.engine.sleep(level=sleep_level)
++        # Sleep clears the receiver cache; also reset the sender before the next rollout.
++        await self.engine.reset_mm_cache()
+         if _VLLM_VERSION >= version.parse("0.17.0"):
+             await self.engine.reset_encoder_cache()
+ 
+--- a/verl/workers/utils/losses.py
++++ b/verl/workers/utils/losses.py
+@@ -31,6 +31,8 @@
+     batch_num_tokens = data["batch_num_tokens"]
+ 
+     log_prob = model_output["log_probs"]
++    # VLM_PRODUCT_AUDIT_SFT_METRICS_PATCH_V1
++    semantic_loss = None
+ 
+     if pad_mode == DatasetPadMode.NO_PADDING:
+         # log_prob and loss mask are nested tensors of shape [bsz, j1]
+@@ -47,11 +49,21 @@
+         # For FSDP backend, the loss is directly used for backward; while for Megatron backend,
+         # the loss should be scaled by `num_microbatches` for pp schedule.
+         loss = -masked_sum(log_prob_flatten, loss_mask_flatten) / batch_num_tokens * dp_size
++        if "semantic_loss_mask" in data:
++            semantic_loss_mask = torch.roll(data["semantic_loss_mask"].values(), shifts=-1, dims=0)
++            semantic_token_count = data["batch_num_semantic_tokens"]
++            if semantic_token_count <= 0:
++                raise ValueError("semantic_loss_mask contains no active tokens")
++            semantic_loss = -masked_sum(log_prob_flatten, semantic_loss_mask) / semantic_token_count * dp_size
+     else:
+         response_mask = data["response_mask"].to(bool)
+         loss = -masked_sum(log_prob, response_mask) / batch_num_tokens * dp_size
+ 
+-    return loss, {}
++    metrics = {"full_completion_loss": Metric(value=loss.detach(), aggregation=AggregationType.SUM)}
++    if semantic_loss is not None:
++        metrics["semantic_token_loss"] = Metric(value=semantic_loss.detach(), aggregation=AggregationType.SUM)
++
++    return loss, metrics
+ 
+ 
+ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None):

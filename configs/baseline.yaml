@@ -1,0 +1,25 @@
+schema_version: '2.0'
+dataset_split: test
+source_dataset: data/test/test.jsonl
+manifest: outputs/baseline/qwen35_4b/manifest_test.jsonl
+predictions: outputs/baseline/qwen35_4b/predictions.jsonl
+output: outputs/baseline/qwen35_4b/metrics.json
+min_pixels: 784
+max_pixels: 65536
+max_new_tokens: 256
+target_class_prior:
+  pass: 0.6
+  reject: 0.4
+require_gated_deltanet_kernels: true
+use_hub_kernels: false
+cost_matrix:
+  pass:
+    pass: 0.0
+    reject: 0.75
+  reject:
+    pass: 1.0
+    reject: 0.0
+frozen_thresholds:
+  configured: false
+  min_gap_improvement: null
+  min_business_risk_improvement: null

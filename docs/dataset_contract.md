@@ -2,10 +2,10 @@
 
 ## 规范目录
 
-- `data/sft/train.jsonl`：1,000 条，992 个商品。
-- `data/sft/valid.jsonl`：100 条，100 个商品。
-- `data/joint/train.jsonl`：1,000 条，1,000 个商品。
-- `data/joint/valid.jsonl`：100 条，100 个商品。
+- `data/sft/train.jsonl`：1,000 条，973 个来源商品。
+- `data/sft/valid.jsonl`：100 条，88 个来源商品。
+- `data/GRPO/train.jsonl`：1,000 条，1,000 个商品。
+- `data/GRPO/valid.jsonl`：100 条，100 个商品。
 - `data/test/test.jsonl`：200 条，200 个商品。
 
 每条记录对应一个商品的三张图片：`main`、`detail:1`、`detail:2`。图片实际文件放在同一数据集下的 `images/`。

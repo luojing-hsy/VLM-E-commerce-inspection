@@ -9,7 +9,7 @@ from src.common import read_jsonl, write_jsonl
 
 SPLITS = ("train", "validation", "test")
 TRAIN_SPLITS = ("train", "validation")
-DATASET_STAGES = ("sft", "grpo", "opd", "test")
+DATASET_STAGES = ("sft", "grpo", "test")
 
 
 def stable_split_for(component_id: str, seed: int, ratios: dict[str, float]) -> str:
