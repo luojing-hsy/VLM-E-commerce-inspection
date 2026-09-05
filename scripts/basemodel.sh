@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${ROOT}/.venv/bin/python"
-CONFIG="${EVAL_CONFIG:-${ROOT}/configs/eval.yaml}"
+CONFIG="${EVAL_CONFIG:-${ROOT}/configs/baseline.yaml}"
 if [[ ! -x "${PYTHON}" ]]; then
   echo "Training environment is missing; run: bash scripts/setup.sh" >&2
   exit 1
@@ -11,6 +11,20 @@ if [[ -z "${OMP_NUM_THREADS:-}" || "${OMP_NUM_THREADS}" == "0" ]]; then
   export OMP_NUM_THREADS=1
 fi
 cd "${ROOT}"
+
+if [[ "${1:-}" == "--dry-run" || "${1:-}" == "--print-command" ]]; then
+  if [[ "$#" -ne 1 ]]; then exit 2; fi
+  exec "${PYTHON}" scripts/check_pipeline_inputs.py --stage baseline --config "${CONFIG}"
+fi
+if [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: bash scripts/basemodel.sh [--dry-run|--print-command|--help]"
+  echo "Environment: EVAL_CONFIG, BASEMODEL_MODEL, BASEMODEL_PREDICTIONS, BASEMODEL_FORCE=1"
+  exit 0
+fi
+if [[ "$#" -ne 0 ]]; then
+  echo "Unsupported baseline arguments; see --help" >&2
+  exit 2
+fi
 read_config_value() {
   "${PYTHON}" - "$1" "$2" <<'PY'
 from pathlib import Path
@@ -31,8 +45,7 @@ resolve_path() {
     printf '%s\n' "${ROOT}/${value#./}"
   fi
 }
-if pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[s]ft" >/dev/null 2>&1 \
-  || pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[g]rpo" >/dev/null 2>&1; then
+if pgrep -f '([s]rc.training.train_(sft|grpo)|[v]erl.trainer.(main_ppo|sft_trainer))' >/dev/null 2>&1; then
   echo "A project training process is already running under ${ROOT}; refusing a concurrent evaluation." >&2
   exit 1
 fi
@@ -98,7 +111,7 @@ if not expected or len(expected) != len(actual) or set(expected) != set(actual):
     raise SystemExit(1)
 PY
 }
-if [[ "${BASEMODEL_FORCE:-0}" == "1" ]] || [[ ! -f "${PREDICTIONS}" ]] || ! prediction_matches_manifest; then
+if [[ "${BASEMODEL_FORCE:-1}" == "1" ]] || [[ ! -f "${PREDICTIONS}" ]] || ! prediction_matches_manifest; then
   mkdir -p "$(dirname "${PREDICTIONS}")"
   "${PYTHON}" -m src.evaluation.predict \
     --config "${CONFIG}" \

@@ -41,3 +41,14 @@ loss was 0.1062. These are training/validation metrics, not an additional held-o
 The raw metric files in this directory preserve the complete per-class breakdown, confusion matrix,
 timing, and memory fields emitted by the evaluator. Paths in the original evaluator output refer to
 the training server; no checkpoint files are tracked here.
+
+## Provenance and comparability (2026-09-05)
+
+The current Qwen3.5 SFT test is sft_direct_three_image_test.json (80% decision accuracy).
+sft_evaluation.json and baseline_current_direct.json are historical reports whose model/run
+identity is not sufficiently established for a current-model comparison. The table above
+lists archived measurements, not a controlled re-evaluation. Business-risk settings and
+protocol/prompt versions may differ. Resumed inference timing may cover only pending samples.
+grpo_training_metrics.jsonl records initialization validation and 80 completed steps; its final
+validation reward is 0.84960656, not test decision accuracy.
+See ../REPRODUCIBILITY.md for configurations and verification boundaries.

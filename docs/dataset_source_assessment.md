@@ -11,7 +11,7 @@
 
 最终使用的数据目录为：
 
-`data/sft`、`data/joint`、`data/test`。
+`data/sft`、`data/GRPO`、`data/test`。
 
 三套数据均将 JSONL 实际引用的图片放在对应的 `images/` 目录。当前重构只复用已有源数据和已有图片文件，不新增图片内容。
 

@@ -26,3 +26,6 @@ wandb/
 .env
 .env.*
 !.env.example
+
+# Notebook auto-save copies
+.ipynb_checkpoints/

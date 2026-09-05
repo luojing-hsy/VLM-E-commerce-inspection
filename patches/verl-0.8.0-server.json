@@ -1,0 +1,87 @@
+{
+  "version": "0.8.0",
+  "wheel_sha256": "4e32830aae80771ee3b5f0d26a2b794d793f3bcece67aff07c2a7c62e948714f",
+  "patch_sha256": "4b37868abae72b3a2beae963068ed5872f3be624669ee1c774f9e23d073c765e",
+  "files": [
+    {
+      "path": "verl/experimental/agent_loop/agent_loop.py",
+      "original_sha256": "9bcbc04a190ac809baf5225aaf2c98107cc91b6e3996cf46d99387d7050dd195",
+      "patched_sha256": "fdfea1476745b24d9355f13ca92a1ecd509bd7075d04b7d545596f60873ddfc9"
+    },
+    {
+      "path": "verl/experimental/agent_loop/single_turn_agent_loop.py",
+      "original_sha256": "066fade7d9c73076937af7d263fb9a1cefb38903c667ced79238ce567323758c",
+      "patched_sha256": "0aae03707b3069d2e700457742456797aec0ed37821ad0f52b0e374de13cf7fb"
+    },
+    {
+      "path": "verl/experimental/teacher_loop/teacher_manager.py",
+      "original_sha256": "eb4f991be0575f37479e32e649f3bb15db2bd1ab78db9d3bb0a973a199746ffa",
+      "patched_sha256": "2fbf2509647e37425e3ac7ddbbe56c1134ebcc794cfd75476c1e2723461bc652"
+    },
+    {
+      "path": "verl/trainer/main_ppo.py",
+      "original_sha256": "e3fe6e73b18d63367402a2570c5ba054a2b05443ac40a168524dbf545b1da392",
+      "patched_sha256": "19aead8e5286bf9e9fd657a9cb4fb353ada89c6a6eb7d8259a89b2817ce61b6f"
+    },
+    {
+      "path": "verl/trainer/sft_trainer.py",
+      "original_sha256": "22e21f4a69ec473116454a6e97cd3462ad63a47c580740d7b5b9a31c00587e84",
+      "patched_sha256": "aa7a2a0d869f8e16e368b1b3d2e66e98de0eaa8842c6d0e88c6c1bf7e8bae621"
+    },
+    {
+      "path": "verl/trainer/distillation/losses.py",
+      "original_sha256": "8a7a0748d18573083997baef41a5453c256ceb4e1df4b8b2e94f5d02d4a3e7c9",
+      "patched_sha256": "edab2e98b0535708edf5f786333705ba97dea1ff90058fd9e4a5e466c69f1cd2"
+    },
+    {
+      "path": "verl/trainer/ppo/ray_trainer.py",
+      "original_sha256": "de58d295cf86656a28196b0718168d4a11666f3e30957b7e166914496c2a6d66",
+      "patched_sha256": "af544e626179539d45bb2409917bb62b520a31d0cb55c3de05b1c1f1b79ff94a"
+    },
+    {
+      "path": "verl/utils/attention_utils.py",
+      "original_sha256": "8da49fde853e5b5748db887bf2602fc290bb2a514041c9589482bb0d846d2ec0",
+      "patched_sha256": "849ace26318500913e95eacc945fb055b6e62eb54fa56340e2201604c74ddd9e"
+    },
+    {
+      "path": "verl/utils/tensordict_utils.py",
+      "original_sha256": "4dc4c321a51e256232751ddb5cb2a2be129076e7f02f36a685fcad6d0d98f5f1",
+      "patched_sha256": "5382d3efa0f4d3d510f4c83653211b330a9a10d0f4406459ad065f326b5f38b4"
+    },
+    {
+      "path": "verl/utils/tracking.py",
+      "original_sha256": "a96d48404c53425d4c6f44eb164e72d7a55edfea3337e4279ad9fd8f4695db77",
+      "patched_sha256": "ce816e09cd861f0835ef57e1e9375be0d93b448af054f517f86b828bbf138e6b"
+    },
+    {
+      "path": "verl/utils/checkpoint/checkpoint_handler.py",
+      "original_sha256": "3b547c2b97e01b7587866053b4aa624d81b8cdd9d75fff20a97420690206a896",
+      "patched_sha256": "8509d9a9155a73e5097b0bdbd0169224f557f016d15c0fda3d671d62983ed37a"
+    },
+    {
+      "path": "verl/utils/dataset/rl_dataset.py",
+      "original_sha256": "7463b89114625d736e376a10622253be120bfe8c3f6b7d7b54b49beb790525b8",
+      "patched_sha256": "b49ba9a957a2b6cadd2bd17431737d4d1759956f9a2233713bae4d64918d5be9"
+    },
+    {
+      "path": "verl/workers/config/model.py",
+      "original_sha256": "4b382b0c06edf133c332822b61c5cf57f973f244d0f602f3f4e161956e6a775c",
+      "patched_sha256": "fae1968c224241047a161d0c0b9247e3510ab1f93563e42e8ee6833f4bb8c18a"
+    },
+    {
+      "path": "verl/workers/engine/fsdp/transformer_impl.py",
+      "original_sha256": "b4f6243471f22c08dbfa472d13f708e8de609705ecff13f23713258160cf7902",
+      "patched_sha256": "9a4168f87853822e1937ca8e471eccc433d50c7a2404cb6a8242372d92e59b15"
+    },
+    {
+      "path": "verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+      "original_sha256": "c7aafaa923edb7ab19c6a3d147643013be687df76d79ef38e855958d8382c68c",
+      "patched_sha256": "8e2532c8eccae91253575e64ca089d7502e63d87e47f96cacb5e260f0ce36df2"
+    },
+    {
+      "path": "verl/workers/utils/losses.py",
+      "original_sha256": "701a0bf7cd7c0fa3cde670379d44cce5755bcd44222e8866716e69d27a400b5d",
+      "patched_sha256": "3faf0888a59d7799e51c4aa0314a4c3d51ef5a40b3eba5a203878b4d385e1e80"
+    }
+  ]
+}

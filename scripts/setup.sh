@@ -9,12 +9,22 @@ OVERRIDES="${ROOT}/scripts/training-overrides.txt"
 KERNEL_REQUIREMENTS="${ROOT}/scripts/training-kernel-requirements.txt"
 UV_VERSION="${UV_VERSION:-0.12.5}"
 
+if [[ "${1:-}" == "--check" ]]; then
+  cd "${ROOT}"
+  "${PYTHON}" "${ROOT}/scripts/verify_training_stack.py"
+  exec "${PYTHON}" "${ROOT}/scripts/apply_verl_server_patch.py" --check
+fi
+if [[ "$#" -ne 0 ]]; then
+  echo "Usage: bash scripts/setup.sh [--check]" >&2
+  exit 2
+fi
+
 export PATH="${HOME}/.local/bin:${HOME}/miniconda3/bin:${PATH}"
 if [[ -z "${OMP_NUM_THREADS:-}" || "${OMP_NUM_THREADS}" == "0" ]]; then
   export OMP_NUM_THREADS=1
 fi
 
-if pgrep -f "${ROOT}/.venv/bin/python -m src.training.train_[a-z]" >/dev/null 2>&1; then
+if pgrep -f '([s]rc.training.train_(sft|grpo)|[v]erl.trainer.(main_ppo|sft_trainer))' >/dev/null 2>&1; then
   echo "A project training process is already running under ${ROOT}; refusing to modify the environment." >&2
   exit 1
 fi
@@ -42,7 +52,7 @@ fi
 
 cd "${ROOT}"
 if [[ ! -x "${PYTHON}" ]]; then
-  uv venv --python 3.12 --seed --clear "${VENV_DIR}"
+  uv venv --python 3.12 --seed "${VENV_DIR}"
 fi
 
 if ! "${PYTHON}" -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 12))'; then
@@ -68,14 +78,8 @@ uv pip install \
   --editable "${ROOT}"
 
 "${PYTHON}" "${ROOT}/scripts/verify_training_stack.py"
-"${PYTHON}" "${ROOT}/scripts/apply_verl_patch.py"
-"${PYTHON}" "${ROOT}/scripts/apply_verl_patch.py" --check
-"${PYTHON}" "${ROOT}/scripts/apply_verl_joint_patch.py"
-"${PYTHON}" "${ROOT}/scripts/apply_verl_joint_patch.py" --check
-"${PYTHON}" "${ROOT}/scripts/apply_verl_mm_projector_patch.py"
-"${PYTHON}" "${ROOT}/scripts/apply_verl_mm_projector_patch.py" --check
-"${PYTHON}" "${ROOT}/scripts/apply_verl_sft_metrics_patch.py"
-"${PYTHON}" "${ROOT}/scripts/apply_verl_sft_metrics_patch.py" --check
+"${PYTHON}" "${ROOT}/scripts/apply_verl_server_patch.py"
+"${PYTHON}" "${ROOT}/scripts/apply_verl_server_patch.py" --check
 
-echo "Qwen3.5 SFT, validation, test, and joint veRL GRPO+OPD environment is ready: ${VENV_DIR}"
-echo "Run launchers from the repository root, for example: bash scripts/joint.sh --dry-run"
+echo "Qwen3.5 SFT, validation, test, and GRPO environment is ready: ${VENV_DIR}"
+echo "Run launchers from the repository root, for example: bash scripts/grpo.sh --dry-run"

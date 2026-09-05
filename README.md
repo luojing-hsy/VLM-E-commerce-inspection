@@ -1,5 +1,7 @@
 # Qwen3.5 商品多图一致性质检（当前版本）
 
+完整操作与实验记录见 [复现指南](docs/REPRODUCIBILITY.md)，本次验证见 [检查记录](docs/verification_20260905.md)。
+
 ## 当前口径
 
 项目以服务器目录 `/root/autodl-tmp/vlm-qwen3vl` 为准。原始清单为 `data/all_product.jsonl`，共 3,986 个商品；清洗后每个商品保留 1 张 main 和 2 张 detail，共 11,958 张图片。
@@ -8,15 +10,15 @@
 
 | 数据集 | 文件 | 样本 | 商品 | 易/中/难 |
 |---|---|---:|---:|---:|
-| SFT train | `data/sft/train.jsonl` | 1,000 | 992 | 600/300/100 |
-| SFT valid | `data/sft/valid.jsonl` | 100 | 100 | 60/30/10 |
+| SFT train | `data/sft/train.jsonl` | 1,000 | 973 | 600/300/100 |
+| SFT valid | `data/sft/valid.jsonl` | 100 | 88 | 60/30/10 |
 | GRPO train | `data/GRPO/train.jsonl` | 1,000 | 1,000 | 300/400/300 |
 | GRPO valid | `data/GRPO/valid.jsonl` | 100 | 100 | 30/40/30 |
 | Test | `data/test/test.jsonl` | 200 | 200 | 100/60/40 |
 
-SFT 的类别配额为：训练集易/中类各 150、难类各 50；验证集易/中类各 15、难类各 5。SFT 每个商品保留 0–3 条，当前训练集最多 3 条、验证集最多 1 条。GRPO 已从 `data/GRPO_synthesis` 重新抽样，训练集按易类 4×75、中类 2×200、难类 2×150 配额，验证集按易类 8/8/7/7、中类 2×20、难类 2×15 配额；每个来源商品只保留 1 条。
+SFT 的类别配额为：训练集易/中类各 150、难类各 50；验证集易/中类各 15、难类各 5。SFT 每个商品保留 0–3 条，当前训练集和验证集最多均为 3 条。GRPO 已从 `data/GRPO_synthesis` 重新抽样，训练集按易类 4×75、中类 2×200、难类 2×150 配额，验证集按易类 8/8/7/7、中类 2×20、难类 2×15 配额；每个来源商品只保留 1 条。
 
-SFT 的逐项审计见 [`docs/sft_dataset_analysis.md`](docs/sft_dataset_analysis.md)。报告明确记录了当前 SFT 的 `IMAGE_QUALITY` 位置 shortcut 和 `WRONG_IMAGE` 主图缺失，不将其当作已修复的均衡结果。
+SFT 的逐项审计见 [`docs/sft_dataset_analysis.md`](docs/sft_dataset_analysis.md)。本次快照已覆盖三种错图位置和质量子类型/位置组合，详见报告中的 2026-09-05 更新。
 
 ## 标签与难度
 
